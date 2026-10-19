@@ -6,7 +6,9 @@
     "node": ">=24.0.0"
   },
   "scripts": {
+    "predev": "node scripts/emit-node-runtime.mjs",
     "dev": "TZ=Asia/Shanghai next dev",
+    "prebuild": "node scripts/emit-node-runtime.mjs",
     "build": "next build",
     "start": "TZ=Asia/Shanghai next start",
     "lint": "eslint .",

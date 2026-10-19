@@ -1,5 +1,6 @@
 node_modules
 .next
+.barker-node
 out
 data/
 *.tsbuildinfo
