@@ -44,7 +44,10 @@ export async function runSchedulerCycle(now = new Date()): Promise<void> {
   cycle = (async () => {
     try {
       await enqueueDueOccurrences(now);
-      await processOneDelivery(now);
+      for (let sent = 0; sent < 20; sent += 1) {
+        const processed = await processOneDelivery(now);
+        if (!processed) break;
+      }
     } catch (error) {
       console.error("[Barker] scheduler cycle failed; database state retained:", error);
     }

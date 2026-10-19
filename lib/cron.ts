@@ -6,12 +6,21 @@ export const SCHEDULE_TIME_ZONE = "Asia/Shanghai";
 function scheduleParts(date: Date): Record<string, number> {
   const formatter = new Intl.DateTimeFormat("en-US", {
     timeZone: SCHEDULE_TIME_ZONE,
-    year: "numeric", month: "numeric", day: "numeric",
+    year: "numeric", month: "numeric", day: "numeric", weekday: "short",
     hour: "numeric", minute: "numeric", hourCycle: "h23",
   });
-  return Object.fromEntries(formatter.formatToParts(date)
+  const parts = Object.fromEntries(formatter.formatToParts(date)
     .filter((part) => part.type !== "literal")
-    .map((part) => [part.type, Number(part.value)]));
+    .map((part) => [part.type, part.value]));
+  const weekdays: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+  return {
+    year: Number(parts.year),
+    month: Number(parts.month),
+    day: Number(parts.day),
+    hour: Number(parts.hour),
+    minute: Number(parts.minute),
+    weekday: weekdays[parts.weekday],
+  };
 }
 
 function cronSchedule(expression: string): Cron {
@@ -36,12 +45,9 @@ export function nextCronDate(expression: string, from: Date): Date {
 }
 
 export function presetCron(preset: RecurrencePreset, startsAt: Date): string {
-  const { minute, hour, day, month, year } = scheduleParts(startsAt);
+  const { minute, hour, day, weekday } = scheduleParts(startsAt);
   if (preset === "daily") return `${minute} ${hour} * * *`;
-  if (preset === "weekly") {
-    const weekday = new Date(Date.UTC(year, month - 1, day)).getUTCDay();
-    return `${minute} ${hour} * * ${weekday}`;
-  }
+  if (preset === "weekly") return `${minute} ${hour} * * ${weekday}`;
   if (preset === "monthly") return `${minute} ${hour} ${day} * *`;
   throw new Error("Custom schedules require an explicit cron expression");
 }

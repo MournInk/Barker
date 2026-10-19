@@ -7,6 +7,7 @@ test("daily, weekly and monthly presets use Shanghai wall time", () => {
   assert.equal(presetCron("daily", start), "30 9 * * *");
   assert.equal(presetCron("weekly", start), "30 9 * * 1");
   assert.equal(presetCron("monthly", start), "30 9 19 * *");
+  assert.equal(presetCron("weekly", new Date("2026-10-18T16:30:00.000Z")), "30 0 * * 1");
   assert.equal(localDateString(start), "2026-10-19");
 });
 

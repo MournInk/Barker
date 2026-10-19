@@ -63,6 +63,23 @@ test("pause, update and delete preserve pending deliveries", async () => {
   assert.equal(db.deleteTask(task.id), true);
 });
 
+test("pausing after the due minute still queues that occurrence", async () => {
+  const task = db.createTask(taskInput(3), new Date("2026-10-18T00:00:00Z"));
+  db.setTaskStatus(task.id, "paused", new Date("2026-10-19T01:30:00Z"));
+  assert.equal(db.deliverySummary().pending, 1);
+  assert.equal(db.getTask(task.id)?.status, "paused");
+  assert.equal(db.getTask(task.id)?.nextRunAt, "2026-10-20T01:30:00.000Z");
+});
+
+test("resuming after missed minutes queues those occurrences before the next future run", () => {
+  const task = db.createTask(taskInput(5), new Date("2026-10-18T00:00:00Z"));
+  db.setTaskStatus(task.id, "paused", new Date("2026-10-18T12:00:00Z"));
+  const resumed = db.setTaskStatus(task.id, "active", new Date("2026-10-21T01:30:00Z"));
+  assert.equal(db.deliverySummary().pending, 3);
+  assert.equal(resumed?.status, "active");
+  assert.equal(resumed?.nextRunAt, "2026-10-22T01:30:00.000Z");
+});
+
 test("cutoff date completes scheduling but leaves final delivery queued", async () => {
   const task = db.createTask({ ...taskInput(null), endDate: "2026-10-19" }, new Date("2026-10-18T00:00:00Z"));
   await scheduler.enqueueDueOccurrences(new Date("2026-10-19T01:30:00Z"));

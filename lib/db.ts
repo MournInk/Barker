@@ -133,17 +133,34 @@ export function updateTask(id: string, input: TaskInput, now = new Date()): Task
 }
 
 export function setTaskStatus(id: string, status: Task["status"], now = new Date()): Task | null {
-  const task = getTask(id);
-  if (!task) return null;
-  if (task.status === "completed" && status === "active") {
-    throw new Error("已完成的任务不能恢复，请复制后创建新任务");
-  }
-  const nextRunAt = status === "active" && task.status === "paused" && task.nextRunAt && new Date(task.nextRunAt) < now
-    ? nextCronDate(task.cron, now).toISOString()
-    : task.nextRunAt;
-  db.prepare("UPDATE tasks SET status = ?, next_run_at = ?, updated_at = ? WHERE id = ?")
-    .run(status, nextRunAt, now.toISOString(), id);
-  return getTask(id);
+  return transaction(() => {
+    const task = getTask(id);
+    if (!task) return null;
+    if (task.status === "completed" && status === "active") {
+      throw new Error("已完成的任务不能恢复，请复制后创建新任务");
+    }
+    if (status === "paused" && task.status === "active") {
+      const due = task.nextRunAt && new Date(task.nextRunAt) <= now ? new Date(task.nextRunAt) : null;
+      if (due) scheduleOccurrenceUnlocked(task, due, now);
+    }
+    const refreshed = getTask(id);
+    if (!refreshed) return null;
+    let nextRunAt = refreshed.nextRunAt;
+    if (status === "active" && refreshed.status === "paused") {
+      db.prepare("UPDATE tasks SET status = 'active', updated_at = ? WHERE id = ?").run(now.toISOString(), id);
+      for (let produced = 0; produced < 500; produced += 1) {
+        const resumed = getTask(id);
+        const due = resumed?.status === "active" && resumed.nextRunAt && new Date(resumed.nextRunAt) <= now
+          ? new Date(resumed.nextRunAt) : null;
+        if (!resumed || !due) break;
+        scheduleOccurrenceUnlocked(resumed, due, now);
+      }
+      nextRunAt = getTask(id)?.nextRunAt ?? nextRunAt;
+    }
+    db.prepare("UPDATE tasks SET status = ?, next_run_at = ?, updated_at = ? WHERE id = ?")
+      .run(status, nextRunAt, now.toISOString(), id);
+    return getTask(id);
+  });
 }
 
 export function deleteTask(id: string): boolean {
@@ -187,24 +204,26 @@ export function dueTaskRows(now: Date): Task[] {
     .all(now.toISOString()) as TaskRow[]).map(taskFromRow);
 }
 
+function scheduleOccurrenceUnlocked(task: Task, occurrenceAt: Date, now = new Date()): void {
+  const current = getTask(task.id);
+  if (!current || current.status !== "active" || !current.nextRunAt || current.nextRunAt !== occurrenceAt.toISOString()) return;
+  const scheduled = db.prepare("SELECT COUNT(*) as count FROM deliveries WHERE task_id = ?").get(task.id) as { count: number };
+  const occurrenceCount = scheduled.count + 1;
+  const timestamp = now.toISOString();
+  db.prepare(`INSERT INTO deliveries (id, task_id, occurrence_at, status, attempts, next_attempt_at, created_at)
+    VALUES (?, ?, ?, 'pending', 0, ?, ?) ON CONFLICT(task_id, occurrence_at) DO NOTHING`)
+    .run(randomUUID(), task.id, occurrenceAt.toISOString(), timestamp, timestamp);
+  const shouldFinishByCount = current.repeatCount !== null && occurrenceCount >= current.repeatCount;
+  const candidate = nextCronDate(current.cron, occurrenceAt);
+  const shouldFinishByDate = current.endDate !== null && localDateString(candidate) > current.endDate;
+  const nextStatus = shouldFinishByCount || shouldFinishByDate ? "completed" : current.status;
+  db.prepare(`UPDATE tasks SET sent_count = (SELECT COUNT(*) FROM deliveries WHERE task_id = ? AND status = 'sent'),
+    last_run_at = ?, next_run_at = ?, status = ?, updated_at = ? WHERE id = ?`)
+    .run(task.id, occurrenceAt.toISOString(), nextStatus === "completed" ? null : candidate.toISOString(), nextStatus, timestamp, task.id);
+}
+
 export function scheduleOccurrence(task: Task, occurrenceAt: Date, now = new Date()): void {
-  transaction(() => {
-    const current = getTask(task.id);
-    if (!current || current.status !== "active" || !current.nextRunAt || current.nextRunAt !== occurrenceAt.toISOString()) return;
-    const scheduled = db.prepare("SELECT COUNT(*) as count FROM deliveries WHERE task_id = ?").get(task.id) as { count: number };
-    const occurrenceCount = scheduled.count + 1;
-    const timestamp = now.toISOString();
-    db.prepare(`INSERT INTO deliveries (id, task_id, occurrence_at, status, attempts, next_attempt_at, created_at)
-      VALUES (?, ?, ?, 'pending', 0, ?, ?) ON CONFLICT(task_id, occurrence_at) DO NOTHING`)
-      .run(randomUUID(), task.id, occurrenceAt.toISOString(), timestamp, timestamp);
-    const shouldFinishByCount = current.repeatCount !== null && occurrenceCount >= current.repeatCount;
-    const candidate = nextCronDate(current.cron, occurrenceAt);
-    const shouldFinishByDate = current.endDate !== null && localDateString(candidate) > current.endDate;
-    const nextStatus = shouldFinishByCount || shouldFinishByDate ? "completed" : current.status;
-    db.prepare(`UPDATE tasks SET sent_count = (SELECT COUNT(*) FROM deliveries WHERE task_id = ? AND status = 'sent'),
-      last_run_at = ?, next_run_at = ?, status = ?, updated_at = ? WHERE id = ?`)
-      .run(task.id, occurrenceAt.toISOString(), nextStatus === "completed" ? null : candidate.toISOString(), nextStatus, timestamp, task.id);
-  });
+  transaction(() => scheduleOccurrenceUnlocked(task, occurrenceAt, now));
 }
 
 export interface ClaimedDelivery { id: string; taskId: string; occurrenceAt: string; attempts: number; name: string; description: string }
