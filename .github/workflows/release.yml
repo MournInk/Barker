@@ -71,6 +71,11 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # `next-env.d.ts` and the typed-route helpers are generated, not committed
+      # (see .gitignore), so materialise them before typechecking a clean checkout.
+      - name: Generate route types
+        run: pnpm exec next typegen
+
       - name: Typecheck
         run: pnpm typecheck
 

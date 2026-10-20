@@ -4,7 +4,7 @@
 
 > 运行时生成访问密码 · 墙钟 cron（`Asia/Shanghai`）· 每条到点提醒落库为 delivery · 失败指数退避无限重试绝不丢弃 · SQLite WAL 持久化
 
-Author: **MournInk** · Version: **0.4.0** · Node `>=24` · pnpm `>=12`（唯一包管理器）
+Author: **MournInk** · Version: **0.4.1** · Node `>=24` · pnpm `>=12`（唯一包管理器）
 
 ---
 
@@ -41,19 +41,19 @@ docker logs -f barker   # 未设 BARKER_PASSWORD 时在此查看随机密码
 ### 方式 B：docker run
 
 ```bash
-docker build -t barker:0.4.0 .
+docker build -t barker:0.4.1 .
 
 # 命名卷
 docker run -d --name barker -p 3000:3000 \
   -v barker-data:/app/data \
-  barker:0.4.0
+  barker:0.4.1
 
 # 或绑定宿主机目录
 mkdir -p ./data
 docker run -d --name barker -p 3000:3000 \
   -v "$PWD/data:/app/data" \
   -e BARKER_PASSWORD=change-me \
-  barker:0.4.0
+  barker:0.4.1
 
 docker logs barker
 ```
@@ -62,7 +62,7 @@ docker logs barker
 
 `Dockerfile` 为三阶段构建：`deps → builder (pnpm run build) → runner`，`runner` 仅含 `.next/standalone` + `.next/static`，以 `nextjs` 非 root 用户运行，`HEALTHCHECK` 每 30s 探测 `GET /api/session`。
 
-镜像标签：正式版本由 CI 推送到 `ghcr.io/mournink/barker`（`0.4.0` / `0.4` / `latest`）；本地构建用 `docker build -t barker:0.4.0 .`。`deps` 阶段会把 `package.json`、`pnpm-lock.yaml`、`pnpm-workspace.yaml` 一起拷入，确保 `pnpm install --frozen-lockfile` 能按 `allowBuilds` 放行原生构建脚本。
+镜像标签：正式版本由 CI 推送到 `ghcr.io/mournink/barker`（`0.4.0` / `0.4` / `latest`）；本地构建用 `docker build -t barker:0.4.1 .`。`deps` 阶段会把 `package.json`、`pnpm-lock.yaml`、`pnpm-workspace.yaml` 一起拷入，确保 `pnpm install --frozen-lockfile` 能按 `allowBuilds` 放行原生构建脚本。
 
 ---
 
@@ -159,7 +159,7 @@ CI 在推送 `v*` 版本标签时自动执行同一组校验，并构建多架�
 Docker 冒烟：
 
 ```bash
-docker run -d --name barker-smoke -p 3001:3000 barker:0.4.0
+docker run -d --name barker-smoke -p 3001:3000 barker:0.4.1
 curl -i http://localhost:3001/api/session  # 200 {"authenticated":false}
 docker rm -f barker-smoke
 ```
@@ -172,14 +172,14 @@ docker rm -f barker-smoke
 2. 提交后打标签并推送（标签即版本创建动作）：
 
 ```bash
-git tag -a v0.4.0 -m "0.4.0"
-git push origin v0.4.0
+git tag -a v0.4.1 -m "0.4.1"
+git push origin v0.4.1
 ```
 
 3. [`.github/workflows/release.yml`](.github/workflows/release.yml) 自动执行：
-   - 版本一致性守卫：标签 `v0.4.0` 必须等于 `package.json` 的 `version`，否则失败；
+   - 版本一致性守卫：标签 `v0.4.1` 必须等于 `package.json` 的 `version`，否则失败；
    - 校验：`pnpm install --frozen-lockfile` → `typecheck` → `lint` → `test` → `build`；
-   - 发布：构建 `linux/amd64` + `linux/arm64` 镜像并推送 `ghcr.io/mournink/barker`，标签为 `0.4.0` / `0.4` / `latest`（预发布版本不带 `latest`）。
+   - 发布：构建 `linux/amd64` + `linux/arm64` 镜像并推送 `ghcr.io/mournink/barker`，标签为 `0.4.1` / `0.4` / `latest`（预发布版本不带 `latest`）。
 
 `workflow_dispatch` 可手动触发同一套校验，但不会推送镜像；流水线需要 `packages: write` 权限（工作流已声明）。
 
@@ -197,6 +197,7 @@ git push origin v0.4.0
 
 ## 版本
 
+- `0.4.1` — 仓库卫生：`.gitignore` 对齐 Next 16 官方模板并忽略自动生成的 `next-env.d.ts`（该文件在 `next dev` 与 `next build` 下内容不同，此前会造成工作区常驻改动与误提交风险），补充 `coverage` / `build` / `.vercel` / `*.pem` / `.pnp*` 等忽略项；CI 在 typecheck 前增加 `next typegen`，保证干净检出下类型定义齐全。
 - `0.4.0` — 前端重构：迁移至 Tailwind CSS 4 + shadcn/ui（11 个基础组件：button / card / dialog / select / badge / alert 等），以顶部导航 + 居中内容区的简约扁平界面替换原深色侧边栏；概览统计合并为单卡片、任务列表改为单卡分节行 + 弹窗式表单、分页 / 空态 / 设置页视觉重做；修复移动端首屏密度、只读 Cron 可读性、320px 导航裁切、短屏弹窗滚动（底部按钮固定）等问题。
 - `0.3.2` — 工程化收尾：以 pnpm 为唯一包管理器（移除 npm 锁文件与未被引用的 tailwind/postcss 依赖，新增 `pnpm-workspace.yaml` 放行原生构建脚本）、`eslint-config-next` 升至 16 并改用原生 flat config、修复 React 19 新 lint 规则下的前端问题与设置页数据目录显示、限流记录有界化、新增 `v*` 标签触发的发布流水线（校验 + 多架构 GHCR 镜像）。
 - `0.3.1` — 迁移至 pnpm（`packageManager` + `pnpm-lock.yaml` + `Dockerfile` 启用 `corepack`），文档与脚本统一为 `pnpm`。
