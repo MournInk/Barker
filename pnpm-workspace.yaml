@@ -1,0 +1,9 @@
+# pnpm 12 reads workspace settings from this file (the "pnpm" field in
+# package.json is ignored and pnpm 11+ moved these keys here).
+#
+# Native build scripts are blocked by default; only these dependencies are
+# allowed to run them during install. Keep this list in sync with the Docker
+# build, which copies this file before `pnpm install --frozen-lockfile`.
+allowBuilds:
+  esbuild: true
+  unrs-resolver: true

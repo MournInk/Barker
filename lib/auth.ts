@@ -28,6 +28,26 @@ const runtimePassword = loadOrCreateSecret("access-password.txt", process.env.BA
 const sessionSecret = loadOrCreateSecret("session-secret.txt", process.env.BARKER_SESSION_SECRET);
 let passwordPrinted = false;
 const failedLogins = new Map<string, { count: number; firstFailureAt: number; lockedUntil: number }>();
+const FAILED_LOGIN_WINDOW_MS = 10 * 60_000;
+const FAILED_LOGIN_LOCKOUT_MS = 10 * 60_000;
+// With BARKER_TRUST_PROXY an attacker can rotate client keys freely, so keep the
+// in-memory limiter bounded instead of letting it grow with every new address.
+const MAX_FAILED_LOGIN_ENTRIES = 1000;
+
+function pruneFailedLogins(now: number): void {
+  // Drop clients whose failure window and lockout have both expired.
+  for (const [clientKey, state] of failedLogins) {
+    if (now - state.firstFailureAt >= FAILED_LOGIN_WINDOW_MS && state.lockedUntil <= now) failedLogins.delete(clientKey);
+  }
+  const overflow = failedLogins.size - MAX_FAILED_LOGIN_ENTRIES;
+  if (overflow <= 0) return;
+  // Then evict the oldest windows (preferring long-dead clients) until back under the cap.
+  const oldestKeys = [...failedLogins]
+    .sort(([, left], [, right]) => left.firstFailureAt - right.firstFailureAt)
+    .slice(0, overflow)
+    .map(([clientKey]) => clientKey);
+  for (const clientKey of oldestKeys) failedLogins.delete(clientKey);
+}
 
 function sign(value: string): string {
   return createHmac("sha256", sessionSecret).update(value).digest("base64url");
@@ -54,13 +74,14 @@ export function verifyPassword(candidate: string, now = Date.now(), clientKey = 
     failedLogins.delete(clientKey);
     return true;
   }
-  const activeWindow = state && now - state.firstFailureAt < 10 * 60_000 ? state : { count: 0, firstFailureAt: now, lockedUntil: 0 };
+  const activeWindow = state && now - state.firstFailureAt < FAILED_LOGIN_WINDOW_MS ? state : { count: 0, firstFailureAt: now, lockedUntil: 0 };
   activeWindow.count += 1;
   if (activeWindow.count >= 5) {
-    activeWindow.lockedUntil = now + 10 * 60_000;
+    activeWindow.lockedUntil = now + FAILED_LOGIN_LOCKOUT_MS;
     activeWindow.count = 0;
   }
   failedLogins.set(clientKey, activeWindow);
+  pruneFailedLogins(now);
   return false;
 }
 
@@ -132,4 +153,13 @@ export function setSessionCookie(token: string, isHttps = false): string {
 export function clearSessionCookie(isHttps = false): string {
   const secure = isHttps ? "; Secure" : "";
   return `${AUTH_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure}`;
+}
+
+export function __failedLoginsSizeForTests(): number {
+  return failedLogins.size;
+}
+
+export function __pruneFailedLoginsForTests(now: number): number {
+  pruneFailedLogins(now);
+  return failedLogins.size;
 }

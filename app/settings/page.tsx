@@ -7,6 +7,20 @@ import { Shell } from "@/components/nav";
 import type { BarkSettings } from "@/lib/types";
 import { api } from "@/lib/ui";
 
+type SettingsPayload = {
+  settings: Omit<BarkSettings, "deviceKey">;
+  deviceKeyConfigured: boolean;
+  dataDir: string;
+};
+
+type SettingsPageData = { authenticated: boolean; payload: SettingsPayload | null };
+
+async function fetchSettingsPage(): Promise<SettingsPageData> {
+  const session = await api<{ authenticated: boolean }>("/api/session");
+  if (!session.authenticated) return { authenticated: false, payload: null };
+  return { authenticated: true, payload: await api<SettingsPayload>("/api/settings") };
+}
+
 export default function SettingsPage() {
   const [authed, setAuthed] = useState<boolean | null>(null);
   const [settings, setSettings] = useState<BarkSettings>({
@@ -18,20 +32,30 @@ export default function SettingsPage() {
     icon: "",
   });
   const [configured, setConfigured] = useState(false);
+  const [dataDir, setDataDir] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
 
-  const load = useCallback(async () => {
-    const session = await api<{ authenticated: boolean }>("/api/session");
-    setAuthed(session.authenticated);
-    if (!session.authenticated) return;
-    const data = await api<{ settings: Omit<BarkSettings, "deviceKey">; deviceKeyConfigured: boolean }>("/api/settings");
-    setSettings((cur) => ({ ...cur, ...data.settings, deviceKey: "" }));
-    setConfigured(data.deviceKeyConfigured);
+  const apply = useCallback((page: SettingsPageData) => {
+    const payload = page.payload;
+    setAuthed(page.authenticated);
+    if (!payload) return;
+    setSettings((cur) => ({ ...cur, ...payload.settings, deviceKey: "" }));
+    setConfigured(payload.deviceKeyConfigured);
+    setDataDir(payload.dataDir);
   }, []);
 
-  useEffect(() => { void load().catch((e: unknown) => setError(e instanceof Error ? e.message : "无法加载")); }, [load]);
+  const load = useCallback(async () => { apply(await fetchSettingsPage()); }, [apply]);
+
+  useEffect(() => {
+    let alive = true;
+    void fetchSettingsPage().then(
+      (page) => { if (alive) apply(page); },
+      (err: unknown) => { if (alive) setError(err instanceof Error ? err.message : "无法加载"); },
+    );
+    return () => { alive = false; };
+  }, [apply]);
 
   async function save(e: FormEvent) {
     e.preventDefault();
@@ -107,7 +131,7 @@ export default function SettingsPage() {
             <p className="eyebrow">数据</p>
             <h3 style={{ fontSize: 14, marginTop: 6 }}>持久化</h3>
             <p className="muted" style={{ fontSize: 12, lineHeight: 1.6, marginTop: 8 }}>
-              任务与推送队列持久化于 <code>{process.env.NEXT_PUBLIC_BARKER_DATA_DIR ?? "/app/data/barker.sqlite"}</code>（WAL）。
+              任务与推送队列持久化于 <code>{dataDir ? `${dataDir.replace(/\/+$/, "")}/barker.sqlite` : "—"}</code>（WAL）。
               备份时一并拷贝 <code>.sqlite-wal/.sqlite-shm</code>。
             </p>
           </div>

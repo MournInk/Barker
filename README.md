@@ -4,7 +4,7 @@
 
 > 运行时生成访问密码 · 墙钟 cron（`Asia/Shanghai`）· 每条到点提醒落库为 delivery · 失败指数退避无限重试绝不丢弃 · SQLite WAL 持久化
 
-Author: **MournInk** · Version: **0.3.1** · Node `>=24` · pnpm `>=9`
+Author: **MournInk** · Version: **0.3.1** · Node `>=24` · pnpm `>=12`（唯一包管理器）
 
 ---
 
@@ -62,7 +62,7 @@ docker logs barker
 
 `Dockerfile` 为三阶段构建：`deps → builder (pnpm run build) → runner`，`runner` 仅含 `.next/standalone` + `.next/static`，以 `nextjs` 非 root 用户运行，`HEALTHCHECK` 每 30s 探测 `GET /api/session`。
 
-镜像标签：`barker:0.3.1` / `ghcr.io/mournink/barker:0.3.1`
+镜像标签：正式版本由 CI 推送到 `ghcr.io/mournink/barker`（`0.3.1` / `0.3` / `latest`）；本地构建用 `docker build -t barker:0.3.1 .`。`deps` 阶段会把 `package.json`、`pnpm-lock.yaml`、`pnpm-workspace.yaml` 一起拷入，确保 `pnpm install --frozen-lockfile` 能按 `allowBuilds` 放行原生构建脚本。
 
 ---
 
@@ -95,16 +95,20 @@ docker logs barker
 ## 本地开发（不使用 Docker）
 
 ```bash
-node -v  # >=24
-pnpm install           # 或 corepack enable && pnpm install
+node -v                # >=24
+corepack enable        # 按 packageManager 字段启用 pnpm 12
+pnpm install           # 首次安装
 
 pnpm dev               # http://localhost:3000
 pnpm build && pnpm start
 
-pnpm test              # node:test 单元测试（22 用例）
+pnpm test              # node:test 单元测试（23 用例）
 pnpm typecheck         # tsc --noEmit
-pnpm lint              # eslint
+pnpm lint              # eslint（eslint-config-next 16 原生 flat config）
 ```
+
+> 包管理器统一为 pnpm：仓库只保留 `pnpm-lock.yaml`，不要把 npm/yarn 的锁文件带回来。
+> pnpm 12 默认禁止依赖执行安装脚本，仅 `esbuild` / `unrs-resolver` 在 `pnpm-workspace.yaml` 的 `allowBuilds` 中放行。
 
 启动日志：
 
@@ -134,6 +138,8 @@ lib/
 tests/              # node:test 用例
 Dockerfile
 docker-compose.yml
+pnpm-workspace.yaml # pnpm 12 工作区设置（allowBuilds）
+.github/workflows/release.yml  # 打版本标签时校验并发布镜像
 ```
 
 ---
@@ -144,6 +150,8 @@ docker-compose.yml
 pnpm test && pnpm typecheck && pnpm lint && pnpm build
 ```
 
+CI 在推送 `v*` 版本标签时自动执行同一组校验，并构建多架构镜像推送到 GHCR，不必在本地复刻整条流水线。
+
 Docker 冒烟：
 
 ```bash
@@ -151,6 +159,25 @@ docker run -d --name barker-smoke -p 3001:3000 barker:0.3.1
 curl -i http://localhost:3001/api/session  # 200 {"authenticated":false}
 docker rm -f barker-smoke
 ```
+
+---
+
+## 发布新版本
+
+1. 同步版本号：`package.json` 的 `version` 与 README 顶部版本号。
+2. 提交后打标签并推送（标签即版本创建动作）：
+
+```bash
+git tag -a v0.3.2 -m "0.3.2"
+git push origin v0.3.2
+```
+
+3. [`.github/workflows/release.yml`](.github/workflows/release.yml) 自动执行：
+   - 版本一致性守卫：标签 `v0.3.2` 必须等于 `package.json` 的 `version`，否则失败；
+   - 校验：`pnpm install --frozen-lockfile` → `typecheck` → `lint` → `test` → `build`；
+   - 发布：构建 `linux/amd64` + `linux/arm64` 镜像并推送 `ghcr.io/mournink/barker`，标签为 `0.3.2` / `0.3` / `latest`（预发布版本不带 `latest`）。
+
+`workflow_dispatch` 可手动触发同一套校验，但不会推送镜像；流水线需要 `packages: write` 权限（工作流已声明）。
 
 ---
 
@@ -166,6 +193,7 @@ docker rm -f barker-smoke
 
 ## 版本
 
+- `未发布` — 工程化收尾：以 pnpm 为唯一包管理器（移除 npm 锁文件与未被引用的 tailwind/postcss 依赖，新增 `pnpm-workspace.yaml` 放行原生构建脚本）、`eslint-config-next` 升至 16 并改用原生 flat config、修复 React 19 新 lint 规则下的前端问题与设置页数据目录显示、限流记录有界化、新增 `v*` 标签触发的发布流水线（校验 + 多架构 GHCR 镜像）。
 - `0.3.1` — 迁移至 pnpm（`packageManager` + `pnpm-lock.yaml` + `Dockerfile` 启用 `corepack`），文档与脚本统一为 `pnpm`。
 - `0.3.0` — 多页面重构（`/` 概览 · `/tasks` 分页 · `/settings` 独立页）、侧边栏导航与移动端抽屉、设计系统与分页组件重塑，API 支持 `page/pageSize/status/q` 分页查询。
 - `0.2.0` — Docker 化（standalone 镜像 + compose + healthcheck）、文档重写、依赖升级至 Next 16 / React 19.3 / zod 4.6 等，修复暂停/编辑时的到期提醒丢弃与 `deviceKey` 校验问题。

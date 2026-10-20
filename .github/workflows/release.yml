@@ -1,0 +1,137 @@
+# Release workflow.
+#
+# The repository's versioning convention is an annotated tag `vX.Y.Z` (see
+# v0.2.0 / v0.3.0 / v0.3.1) whose version matches `package.json`. Pushing such a
+# tag runs verification and, if everything passes, publishes a multi-arch image
+# to GitHub Container Registry. `workflow_dispatch` re-runs verification on any
+# ref (and can rebuild the image when dispatched on a `v*` tag ref).
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+# Least privilege: only the image job needs to write packages; everything else
+# is read-only. `secrets.GITHUB_TOKEN` inherits these scopes.
+permissions:
+  contents: read
+  packages: write
+
+# Never cancel an in-flight release: a cancelled `verify` could leave a
+# half-pushed image manifest list behind.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  NEXT_TELEMETRY_DISABLED: "1"
+
+jobs:
+  verify:
+    name: verify
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # No `version:` on purpose: pnpm/action-setup@v4 reads `packageManager`
+      # from package.json, so CI installs exactly the pinned pnpm 12.14.0.
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: pnpm
+
+      # The tag is the source of truth for the release version, so it must match
+      # package.json; otherwise the published image tag would lie about its
+      # contents. `workflow_dispatch` on a non-tag ref skips the check.
+      - name: Verify tag matches package.json version
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF_NAME}" != v* ]]; then
+            echo "::notice::Ref '${GITHUB_REF_NAME}' is not a v* tag; skipping the tag/version guard."
+            exit 0
+          fi
+          tag_version="${GITHUB_REF_NAME#v}"
+          pkg_version="$(node -p "require('./package.json').version")"
+          echo "tag version         : ${tag_version}"
+          echo "package.json version: ${pkg_version}"
+          if [[ "${tag_version}" != "${pkg_version}" ]]; then
+            echo "::error::Tag '${GITHUB_REF_NAME}' does not match package.json version '${pkg_version}'. Bump package.json (and refresh pnpm-lock.yaml) before tagging."
+            exit 1
+          fi
+          echo "::notice::Tag and package.json agree on version ${pkg_version}."
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Test
+        run: pnpm test
+
+      - name: Build
+        run: pnpm build
+
+  image:
+    name: image
+    needs: verify
+    # Only tag pushes publish: branch pushes and plain manual dispatches stop
+    # after verification. Re-running a failed run replays the same tag ref.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Semver tags derive from the git tag: `v0.3.1` -> `0.3.1` and `0.3`.
+      # `latest` must not follow prereleases (e.g. `v0.4.0-rc.1`), so automatic
+      # latest tagging is disabled via flavor and re-added explicitly only for
+      # stable tags. Pushing an older stable tag would still move `latest`
+      # backwards; only the newest tag is normally pushed in this repo.
+      - name: Extract image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          flavor: |
+            latest=false
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
+
+      - name: Build and push multi-arch image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

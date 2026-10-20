@@ -1,7 +1,9 @@
 import { Cron } from "croner";
+import { SCHEDULE_TIME_ZONE } from "./types";
 import type { RecurrencePreset } from "./types";
 
-export const SCHEDULE_TIME_ZONE = "Asia/Shanghai";
+export { SCHEDULE_TIME_ZONE };
+
 
 function scheduleParts(date: Date): Record<string, number> {
   const formatter = new Intl.DateTimeFormat("en-US", {

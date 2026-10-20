@@ -52,6 +52,14 @@ for (let attempt = 0; attempt < 100; attempt += 1) {
 globalDb.barkerDataDir = dataDir;
 globalDb.barkerDb = db;
 
+export function dataDirectory(): string {
+  return globalDb.barkerDataDir || dataDir;
+}
+
+export function databasePath(): string {
+  return join(dataDirectory(), "barker.sqlite");
+}
+
 type TaskRow = {
   id: string; name: string; description: string; starts_at: string; preset: Task["preset"];
   cron: string; repeat_count: number | null; end_date: string | null; sent_count: number;
@@ -317,7 +325,7 @@ export function storeSnapshot(): StoreData {
 }
 
 export function __databasePathForTests(): string {
-  return join(globalDb.barkerDataDir || dataDir, "barker.sqlite");
+  return databasePath();
 }
 
 export function __rawDatabaseForTests(): DatabaseSync {

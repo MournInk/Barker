@@ -8,7 +8,7 @@ import { Pagination } from "@/components/pagination";
 import { TaskCard } from "@/components/task-card";
 import { presetCron } from "@/lib/cron";
 import type { RecurrencePreset, Task, TaskStatus } from "@/lib/types";
-import { api, formatTime, localInputValue, toOffsetDateTime } from "@/lib/ui";
+import { api, formatTime, localDateValue, localInputValue, toOffsetDateTime } from "@/lib/ui";
 
 type LimitMode = "count" | "date";
 const PRESETS: Array<{ value: RecurrencePreset; label: string }> = [
@@ -19,6 +19,8 @@ const PRESETS: Array<{ value: RecurrencePreset; label: string }> = [
 ];
 
 const PAGE_SIZE = 8;
+
+type TaskPageData = { authenticated: boolean; tasks: Task[]; total: number };
 
 export default function TasksPage() {
   const [authed, setAuthed] = useState<boolean | null>(null);
@@ -37,34 +39,52 @@ export default function TasksPage() {
   const [cron, setCron] = useState("0 9 * * *");
   const [limitMode, setLimitMode] = useState<LimitMode>("count");
   const [repeatCount, setRepeatCount] = useState("30");
-  const [endDate, setEndDate] = useState(localInputValue(new Date(Date.now() + 86_400_000)).slice(0, 10));
+  // Filled with the default (tomorrow in Asia/Shanghai) when 截止日期 mode is picked, so no impure date is computed during render.
+  const [endDate, setEndDate] = useState("");
   const formRef = useRef<HTMLFormElement>(null);
 
   const generatedCron = useMemo(() => {
     if (preset === "custom") return cron;
-    return presetCron(preset, new Date(`${startsAt}:00+08:00`));
+    return presetCron(preset, new Date(toOffsetDateTime(startsAt)));
   }, [cron, preset, startsAt]);
 
-  const load = useCallback(async () => {
+  const fetchCurrent = useCallback(async (): Promise<TaskPageData> => {
     const session = await api<{ authenticated: boolean }>("/api/session");
-    setAuthed(session.authenticated);
-    if (!session.authenticated) return;
+    if (!session.authenticated) return { authenticated: false, tasks: [], total: 0 };
     const url = new URL("/api/tasks", window.location.origin);
     url.searchParams.set("page", String(page));
     url.searchParams.set("pageSize", String(PAGE_SIZE));
     if (status) url.searchParams.set("status", status);
     if (q.trim()) url.searchParams.set("q", q.trim());
     const data = await api<{ tasks: Task[]; total: number; page: number; pageSize: number }>(`${url.pathname}${url.search}`);
-    setTasks(data.tasks);
-    setTotal(data.total);
+    return { authenticated: true, tasks: data.tasks, total: data.total };
   }, [page, q, status]);
 
-  useEffect(() => { void load().catch((e: unknown) => setError(e instanceof Error ? e.message : "无法加载")); }, [load]);
+  const apply = useCallback((data: TaskPageData) => {
+    setAuthed(data.authenticated);
+    setTasks(data.tasks);
+    setTotal(data.total);
+  }, []);
+
+  const load = useCallback(async () => { apply(await fetchCurrent()); }, [apply, fetchCurrent]);
+
+  useEffect(() => {
+    let alive = true;
+    void fetchCurrent().then(
+      (data) => { if (alive) apply(data); },
+      (err: unknown) => { if (alive) setError(err instanceof Error ? err.message : "无法加载"); },
+    );
+    return () => { alive = false; };
+  }, [apply, fetchCurrent]);
+
   useEffect(() => {
     if (!authed) return;
-    const t = setInterval(() => { void load().catch(() => undefined); }, 5_000);
-    return () => clearInterval(t);
-  }, [authed, load]);
+    let alive = true;
+    const timer = setInterval(() => {
+      void fetchCurrent().then((data) => { if (alive) apply(data); }, () => undefined);
+    }, 5_000);
+    return () => { alive = false; clearInterval(timer); };
+  }, [apply, authed, fetchCurrent]);
 
   function beginEdit(task: Task) {
     setEditing(task);
@@ -73,7 +93,7 @@ export default function TasksPage() {
     setCron(task.cron);
     setLimitMode(task.repeatCount ? "count" : "date");
     setRepeatCount(String(task.repeatCount ?? 30));
-    setEndDate(task.endDate ?? localInputValue().slice(0, 10));
+    setEndDate(task.endDate ?? localDateValue());
     formRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
@@ -171,7 +191,7 @@ export default function TasksPage() {
 
             <div className="choice" role="group" aria-label="结束条件">
               <button type="button" className={limitMode === "count" ? "selected" : ""} aria-pressed={limitMode === "count"} onClick={() => setLimitMode("count")}>重复次数</button>
-              <button type="button" className={limitMode === "date" ? "selected" : ""} aria-pressed={limitMode === "date"} onClick={() => setLimitMode("date")}>截止日期</button>
+              <button type="button" className={limitMode === "date" ? "selected" : ""} aria-pressed={limitMode === "date"} onClick={() => { setLimitMode("date"); setEndDate((cur) => cur || localDateValue(new Date(Date.now() + 86_400_000))); }}>截止日期</button>
             </div>
             {limitMode === "count" ? (
               <label>次数<input type="number" min={1} value={repeatCount} onChange={(e) => setRepeatCount(e.target.value)} required /></label>

@@ -1,5 +1,12 @@
 export type RecurrencePreset = "daily" | "weekly" | "monthly" | "custom";
 
+/**
+ * Single source of truth for the scheduler wall clock. Kept in this dependency-free
+ * module so both the server (lib/cron.ts, lib/db.ts) and client components
+ * (lib/ui.ts) can share it without pulling `croner` into the browser bundle.
+ */
+export const SCHEDULE_TIME_ZONE = "Asia/Shanghai";
+
 export type TaskStatus = "active" | "paused" | "completed";
 
 export interface Task {

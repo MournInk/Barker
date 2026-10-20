@@ -3,11 +3,12 @@ import type { NextConfig } from "next";
 const nextConfig: NextConfig = {
   output: "standalone",
   turbopack: {},
-  serverExternalPackages: ["node:sqlite", "node:crypto", "node:fs", "node:path"],
   webpack: (config, { nextRuntime }) => {
-    // instrumentation.ts is also bundled by the edge compiler in dev, where the
-    // node: scheme is otherwise unhandled. Those imports are only executed under
-    // NEXT_RUNTIME=nodejs (see the guard in register), so keep them external.
+    // This hook only applies to webpack builds (`next build --webpack`);
+    // Turbopack builds never invoke it. instrumentation.ts is also bundled by
+    // the edge compiler in dev, where the node: scheme is otherwise unhandled.
+    // Those imports are only executed under NEXT_RUNTIME=nodejs (see the guard
+    // in register), so keep them external.
     if (nextRuntime === "edge") {
       config.externals = [
         ...config.externals,

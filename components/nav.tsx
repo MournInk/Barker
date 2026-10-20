@@ -3,7 +3,7 @@
 import { Bell, LayoutDashboard, ListTodo, LogOut, Menu, Settings2, X } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { api } from "@/lib/ui";
 
 const NAV = [
@@ -16,8 +16,6 @@ export function Shell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const [open, setOpen] = useState(false);
-
-  useEffect(() => { setOpen(false); }, [pathname]);
 
   async function signOut() {
     try {
@@ -44,7 +42,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
             const active = item.href === "/" ? pathname === "/" : pathname.startsWith(item.href);
             const Icon = item.icon;
             return (
-              <Link key={item.href} href={item.href} className={`nav__item ${active ? "active" : ""}`}>
+              <Link key={item.href} href={item.href} className={`nav__item ${active ? "active" : ""}`} onClick={() => setOpen(false)}>
                 <Icon size={16} /> {item.label}
               </Link>
             );

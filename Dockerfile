@@ -4,11 +4,19 @@
 
 FROM node:24-alpine AS base
 
+# Corepack ships with Node 24 and installs the pnpm version pinned by
+# `packageManager` in package.json. Enabling it in the shared base stage makes
+# pnpm available to every stage that needs it (deps for install, builder for
+# `pnpm run build`).
+RUN corepack enable
+
 # --- deps: install all dependencies (including dev) for the build ---
 FROM base AS deps
 WORKDIR /app
-RUN corepack enable
-COPY package.json pnpm-lock.yaml ./
+# pnpm 12 no longer reads workspace settings from package.json: native build
+# script approvals (`allowBuilds`) live in pnpm-workspace.yaml. Without that
+# file `pnpm install --frozen-lockfile` aborts with ERR_PNPM_IGNORED_BUILDS.
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile
 
 # --- builder: compile Next.js standalone output ---

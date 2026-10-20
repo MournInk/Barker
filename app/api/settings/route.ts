@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { requestIsAuthorized } from "@/lib/auth";
-import { readSettings, writeSettings } from "@/lib/db";
+import { dataDirectory, readSettings, writeSettings } from "@/lib/db";
 import { jsonError, requestBody, validationMessage } from "@/lib/http";
 import { settingsSchema } from "@/lib/validation";
 
@@ -10,7 +10,8 @@ export const dynamic = "force-dynamic";
 export async function GET(request: Request): Promise<NextResponse> {
   if (!requestIsAuthorized(request)) return jsonError("未授权", 401);
   const { deviceKey, ...settings } = readSettings();
-  return NextResponse.json({ settings, deviceKeyConfigured: Boolean(deviceKey) });
+  // Only the absolute data directory is exposed, never any stored secret.
+  return NextResponse.json({ settings, deviceKeyConfigured: Boolean(deviceKey), dataDir: dataDirectory() });
 }
 
 export async function PUT(request: Request): Promise<NextResponse> {

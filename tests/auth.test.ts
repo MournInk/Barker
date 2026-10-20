@@ -27,6 +27,20 @@ test("repeated failures lock a client temporarily", () => {
   assert.equal(auth.verifyPassword("test-access-password", 601_005, "limited-client"), true);
 });
 
+test("failed login state stays bounded when clients rotate addresses", () => {
+  const base = 10_000_000_000_000;
+  for (let i = 0; i < 5000; i += 1) auth.verifyPassword("bad", base + i, `rotating-client-${i}`);
+  const size = auth.__failedLoginsSizeForTests();
+  assert.ok(size > 0 && size <= 1000, `failed-login map is not bounded: ${size} entries`);
+  // A fresh client still gets the documented 5-failure / 10-minute lockout.
+  const client = "rotating-client-after-cap";
+  for (let i = 0; i < 5; i += 1) assert.equal(auth.verifyPassword("bad", base + 10_000 + i, client), false);
+  assert.equal(auth.verifyPassword("test-access-password", base + 10_100, client), false);
+  assert.equal(auth.verifyPassword("test-access-password", base + 10_100 + 601_000, client), true);
+  // Entries whose window and lockout have both expired are pruned.
+  assert.equal(auth.__pruneFailedLoginsForTests(base + 3_600_000), 0);
+});
+
 test("session cookies follow HTTP or HTTPS and malformed cookies are ignored", () => {
   assert.equal(auth.getCookieValue("barker_session=%bad"), null);
   assert.equal(auth.requestUsesHttps(new Request("http://localhost:3000")), false);

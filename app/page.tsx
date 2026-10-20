@@ -16,25 +16,46 @@ type Overview = {
   retryQueue: Array<{ taskId: string; taskName: string; occurrenceAt: string; attempts: number; lastError: string | null; nextAttemptAt: string }>;
 };
 
+type OverviewData = { authenticated: boolean; overview: Overview | null };
+
+async function fetchOverview(): Promise<OverviewData> {
+  const session = await api<{ authenticated: boolean }>("/api/session");
+  if (!session.authenticated) return { authenticated: false, overview: null };
+  return { authenticated: true, overview: await api<Overview>("/api/overview") };
+}
+
 export default function OverviewPage() {
   const [authed, setAuthed] = useState<boolean | null>(null);
   const [overview, setOverview] = useState<Overview | null>(null);
   const [error, setError] = useState("");
 
-  const load = useCallback(async () => {
-    const session = await api<{ authenticated: boolean }>("/api/session");
-    setAuthed(session.authenticated);
-    if (!session.authenticated) { setOverview(null); return; }
-    const data = await api<Overview>("/api/overview");
-    setOverview(data);
+  const apply = useCallback((page: OverviewData) => {
+    setAuthed(page.authenticated);
+    setOverview(page.overview);
   }, []);
 
-  useEffect(() => { void load().catch((e: unknown) => setError(e instanceof Error ? e.message : "无法加载")); }, [load]);
+  const load = useCallback(async () => { apply(await fetchOverview()); }, [apply]);
+
+  useEffect(() => {
+    let alive = true;
+    void fetchOverview().then(
+      (page) => { if (alive) apply(page); },
+      (err: unknown) => { if (alive) setError(err instanceof Error ? err.message : "无法加载"); },
+    );
+    return () => { alive = false; };
+  }, [apply]);
+
   useEffect(() => {
     if (!authed) return;
-    const t = setInterval(() => { void load().catch(() => undefined); }, 5_000);
-    return () => clearInterval(t);
-  }, [authed, load]);
+    let alive = true;
+    const timer = setInterval(() => {
+      void fetchOverview().then(
+        (page) => { if (alive) apply(page); },
+        () => undefined,
+      );
+    }, 5_000);
+    return () => { alive = false; clearInterval(timer); };
+  }, [apply, authed]);
 
   if (authed === null) return <div className="gate"><p className="muted">正在确认访问权限…</p></div>;
   if (!authed) return <Gate onAuthed={() => void load()} />;
