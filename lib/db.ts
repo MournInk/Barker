@@ -89,8 +89,16 @@ export function transaction<T>(callback: () => T): T {
 }
 
 export function readSettings(): BarkSettings {
-  const row = db.prepare("SELECT value FROM settings WHERE key = ?").get(DEFAULT_SETTINGS_KEY) as { value: string };
-  return { ...DEFAULT_SETTINGS, ...JSON.parse(row.value) as BarkSettings };
+  const row = db.prepare("SELECT value FROM settings WHERE key = ?").get(DEFAULT_SETTINGS_KEY) as { value: string } | undefined;
+  if (!row) return { ...DEFAULT_SETTINGS };
+  try {
+    const parsed = JSON.parse(row.value) as Partial<BarkSettings>;
+    return { ...DEFAULT_SETTINGS, ...parsed };
+  } catch (error) {
+    // A corrupt row used to throw on every read, taking down every page/route.
+    console.error("[Barker] settings row is corrupt; falling back to defaults:", error);
+    return { ...DEFAULT_SETTINGS };
+  }
 }
 
 export function writeSettings(settings: BarkSettings): void {
@@ -108,7 +116,9 @@ export function listTasksPaginated(options: {
   status?: Task["status"];
   q?: string;
 }): { tasks: Task[]; total: number } {
-  const page = Math.max(1, Math.floor(options.page));
+  // Clamp both bounds: an unbounded page turns into an `Infinity` OFFSET, which
+  // node:sqlite rejects with a 500 ("datatype mismatch").
+  const page = Math.min(1_000_000, Math.max(1, Math.floor(options.page)));
   const pageSize = Math.min(50, Math.max(1, Math.floor(options.pageSize)));
   const offset = (page - 1) * pageSize;
   const conditions: string[] = [];
@@ -133,9 +143,18 @@ export function getTask(id: string): Task | null {
   return row ? taskFromRow(row) : null;
 }
 
+/** Truncate to minute precision. `datetime-local` has no seconds, and a stray
+ * second would make the earliest allowed minute fall past the matching cron
+ * occurrence, silently skipping today's run and shifting the schedule a day. */
+function startsAtToMinute(value: string): Date {
+  const time = new Date(value).getTime();
+  if (!Number.isFinite(time)) throw new Error("开始时间无效");
+  return new Date(Math.floor(time / 60_000) * 60_000);
+}
+
 function firstRunAt(input: TaskInput, now: Date): Date {
   const earliest = Math.max(
-    Math.ceil(new Date(input.startsAt).getTime() / 60_000) * 60_000,
+    startsAtToMinute(input.startsAt).getTime(),
     Math.ceil(now.getTime() / 60_000) * 60_000,
   );
   const next = nextCronDate(input.cron, new Date(earliest - 1));
@@ -146,7 +165,7 @@ function firstRunAt(input: TaskInput, now: Date): Date {
 }
 
 export function createTask(input: TaskInput, now = new Date()): Task {
-  const start = new Date(input.startsAt);
+  const start = startsAtToMinute(input.startsAt);
   const nextRunAt = firstRunAt(input, now);
   const timestamp = now.toISOString();
   const task: Task = {
@@ -175,7 +194,7 @@ export function updateTask(id: string, input: TaskInput, now = new Date()): Task
     const next = finished ? null : firstRunAt(input, now);
     db.prepare(`UPDATE tasks SET name = ?, description = ?, starts_at = ?, preset = ?, cron = ?,
       repeat_count = ?, end_date = ?, next_run_at = ?, status = ?, updated_at = ? WHERE id = ?`)
-      .run(input.name.trim(), input.description?.trim() || "", new Date(input.startsAt).toISOString(),
+      .run(input.name.trim(), input.description?.trim() || "", startsAtToMinute(input.startsAt).toISOString(),
         input.preset, input.cron.trim(), input.repeatCount ?? null, input.endDate ?? null,
         next?.toISOString() ?? null, finished ? "completed" : current.status, now.toISOString(), id);
     return getTask(id);
@@ -189,14 +208,30 @@ export function setTaskStatus(id: string, status: Task["status"], now = new Date
     if (task.status === "completed" && status === "active") {
       throw new Error("已完成的任务不能恢复，请复制后创建新任务");
     }
-    if (status === "paused" && task.status === "active") queueDueOccurrencesUnlocked(id, now);
+    if (status === "paused" && task.status === "active") {
+      // Pausing must always succeed; anything not queued within the cap is
+      // queued on resume (the task is paused, so nothing can be lost silently).
+      try {
+        queueDueOccurrencesUnlocked(id, now);
+      } catch (error) {
+        if (!(error instanceof Error) || !error.message.includes("积压提醒过多")) throw error;
+        console.warn("[Barker] large backlog on pause; remaining occurrences are queued on resume");
+      }
+    }
     const refreshed = getTask(id);
     if (!refreshed) return null;
     if (refreshed.status === "completed") return refreshed;
     let nextRunAt = refreshed.nextRunAt;
     if (status === "active" && refreshed.status === "paused") {
       db.prepare("UPDATE tasks SET status = 'active', updated_at = ? WHERE id = ?").run(now.toISOString(), id);
-      queueDueOccurrencesUnlocked(id, now);
+      // A backlog larger than the per-call cap must not make resuming impossible:
+      // the task is active now, so the scheduler will keep draining it.
+      try {
+        queueDueOccurrencesUnlocked(id, now);
+      } catch (error) {
+        if (!(error instanceof Error) || !error.message.includes("积压提醒过多")) throw error;
+        console.warn("[Barker] large backlog on resume; the scheduler will continue queueing missed occurrences");
+      }
       if (getTask(id)?.status === "completed") return getTask(id);
       nextRunAt = getTask(id)?.nextRunAt ?? nextRunAt;
     }
@@ -206,13 +241,21 @@ export function setTaskStatus(id: string, status: Task["status"], now = new Date
   });
 }
 
-export function deleteTask(id: string, now = new Date()): boolean {
+/**
+ * Delete a task. By default every delivery must have been delivered; `force`
+ * explicitly discards pending/failed deliveries instead, which is the only way
+ * out of a task whose pushes can never succeed (e.g. a permanently wrong device
+ * key) — otherwise the task could never be deleted.
+ */
+export function deleteTask(id: string, now = new Date(), options: { force?: boolean } = {}): boolean {
   return transaction(() => {
     const exists = db.prepare("SELECT 1 FROM tasks WHERE id = ?").get(id);
     if (!exists) return false;
-    queueDueOccurrencesUnlocked(id, now);
-    const pending = db.prepare("SELECT 1 FROM deliveries WHERE task_id = ? AND status != 'sent' LIMIT 1").get(id);
-    if (pending) throw new Error("该任务有待重试的推送，请等发送成功后再删除");
+    if (!options.force) {
+      queueDueOccurrencesUnlocked(id, now);
+      const pending = db.prepare("SELECT 1 FROM deliveries WHERE task_id = ? AND status != 'sent' LIMIT 1").get(id);
+      if (pending) throw new Error("该任务有待重试的推送，请等发送成功后再删除");
+    }
     db.prepare("DELETE FROM deliveries WHERE task_id = ?").run(id);
     db.prepare("DELETE FROM tasks WHERE id = ?").run(id);
     return true;
@@ -226,9 +269,11 @@ export interface DeliverySummary {
 }
 
 export function deliverySummary(): DeliverySummary {
+  // `sending` is in flight, not delivered: count it so the dashboard does not
+  // report "0 待推送" while a push is actually being attempted.
   const counts = db.prepare(`SELECT
-    SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) pending,
-    SUM(CASE WHEN status = 'pending' AND attempts > 0 THEN 1 ELSE 0 END) retrying,
+    SUM(CASE WHEN status IN ('pending', 'sending') THEN 1 ELSE 0 END) pending,
+    SUM(CASE WHEN status IN ('pending', 'sending') AND attempts > 0 THEN 1 ELSE 0 END) retrying,
     MIN(CASE WHEN status = 'pending' THEN next_attempt_at ELSE NULL END) next_retry_at
     FROM deliveries`).get() as { pending: number | null; retrying: number | null; next_retry_at: string | null };
   return { pending: counts.pending ?? 0, retrying: counts.retrying ?? 0, nextRetryAt: counts.next_retry_at };
@@ -249,15 +294,17 @@ export function dueTaskRows(now: Date): Task[] {
 function scheduleOccurrenceUnlocked(task: Task, occurrenceAt: Date, now = new Date()): void {
   const current = getTask(task.id);
   if (!current || current.status !== "active" || !current.nextRunAt || current.nextRunAt !== occurrenceAt.toISOString()) return;
-  const scheduled = db.prepare("SELECT COUNT(*) as count FROM deliveries WHERE task_id = ?").get(task.id) as { count: number };
-  const occurrenceCount = scheduled.count + 1;
   const timestamp = now.toISOString();
   db.prepare(`INSERT INTO deliveries (id, task_id, occurrence_at, status, attempts, next_attempt_at, created_at)
     VALUES (?, ?, ?, 'pending', 0, ?, ?) ON CONFLICT(task_id, occurrence_at) DO NOTHING`)
     .run(randomUUID(), task.id, occurrenceAt.toISOString(), timestamp, timestamp);
-  const shouldFinishByCount = current.repeatCount !== null && occurrenceCount >= current.repeatCount;
   const candidate = nextCronDate(current.cron, occurrenceAt);
   const shouldFinishByDate = current.endDate !== null && localDateString(candidate) > current.endDate;
+  // Count AFTER the upsert: a conflicting occurrence (already queued) must not
+  // consume one of the repeat budget, otherwise editing at the exact due minute
+  // completes the task one occurrence early.
+  const scheduledAfter = db.prepare("SELECT COUNT(*) as count FROM deliveries WHERE task_id = ?").get(task.id) as { count: number };
+  const shouldFinishByCount = current.repeatCount !== null && scheduledAfter.count >= current.repeatCount;
   const nextStatus = shouldFinishByCount || shouldFinishByDate ? "completed" : current.status;
   db.prepare(`UPDATE tasks SET sent_count = (SELECT COUNT(*) FROM deliveries WHERE task_id = ? AND status = 'sent'),
     last_run_at = ?, next_run_at = ?, status = ?, updated_at = ? WHERE id = ?`)
@@ -280,40 +327,57 @@ export function scheduleOccurrence(task: Task, occurrenceAt: Date, now = new Dat
   transaction(() => scheduleOccurrenceUnlocked(task, occurrenceAt, now));
 }
 
-export interface ClaimedDelivery { id: string; taskId: string; occurrenceAt: string; attempts: number; name: string; description: string }
+export interface ClaimedDelivery {
+  id: string;
+  taskId: string;
+  occurrenceAt: string;
+  attempts: number;
+  name: string;
+  description: string;
+  /** Lease token: marks only apply while this worker still owns the delivery. */
+  leaseUntil: string;
+}
 
 export function claimDelivery(now = new Date()): ClaimedDelivery | null {
   return transaction(() => {
-    db.prepare("UPDATE deliveries SET status = 'pending', lease_until = NULL WHERE status = 'sending' AND lease_until <= ?")
+    // A lease that expired means the worker died mid-send: count it as an
+    // attempt so the retry budget/backoff reflects the crashed try.
+    db.prepare("UPDATE deliveries SET status = 'pending', lease_until = NULL, attempts = attempts + 1 WHERE status = 'sending' AND lease_until <= ?")
       .run(now.toISOString());
     const row = db.prepare(`SELECT d.id, d.task_id taskId, d.occurrence_at occurrenceAt, d.attempts,
       t.name, t.description FROM deliveries d JOIN tasks t ON t.id = d.task_id
       WHERE d.status = 'pending' AND d.next_attempt_at <= ? ORDER BY d.next_attempt_at, d.created_at LIMIT 1`)
-      .get(now.toISOString()) as ClaimedDelivery | undefined;
+      .get(now.toISOString()) as Omit<ClaimedDelivery, "leaseUntil"> | undefined;
     if (!row) return null;
-    const lease = new Date(now.getTime() + 2 * 60_000).toISOString();
-    db.prepare("UPDATE deliveries SET status = 'sending', lease_until = ? WHERE id = ?").run(lease, row.id);
-    return row;
+    const leaseUntil = new Date(now.getTime() + 2 * 60_000).toISOString();
+    db.prepare("UPDATE deliveries SET status = 'sending', lease_until = ? WHERE id = ?").run(leaseUntil, row.id);
+    return { ...row, leaseUntil };
   });
 }
 
-export function markDeliverySent(id: string, now = new Date()): void {
+export function markDeliverySent(id: string, leaseUntil: string, now = new Date()): void {
   transaction(() => {
+    // Ownership guard: a slow worker whose lease was reclaimed must not mark a
+    // delivery that another attempt already owns (that would resurrect it and
+    // push the reminder twice).
+    const changed = db.prepare(`UPDATE deliveries SET status = 'sent', delivered_at = ?, last_error = NULL, lease_until = NULL
+      WHERE id = ? AND status = 'sending' AND lease_until = ?`).run(now.toISOString(), id, leaseUntil);
+    if (changed.changes === 0) return;
     const row = db.prepare("SELECT task_id taskId FROM deliveries WHERE id = ?").get(id) as { taskId: string } | undefined;
     if (!row) return;
-    db.prepare("UPDATE deliveries SET status = 'sent', delivered_at = ?, last_error = NULL, lease_until = NULL WHERE id = ?")
-      .run(now.toISOString(), id);
     db.prepare(`UPDATE tasks SET sent_count = (SELECT COUNT(*) FROM deliveries WHERE task_id = ? AND status = 'sent'),
       last_error = NULL, updated_at = ? WHERE id = ?`).run(row.taskId, now.toISOString(), row.taskId);
   });
 }
 
-export function markDeliveryFailed(id: string, attempts: number, error: string, now = new Date()): void {
+export function markDeliveryFailed(id: string, leaseUntil: string, attempts: number, error: string, now = new Date()): void {
   transaction(() => {
-    const delaySeconds = Math.min(5 * 2 ** Math.min(attempts, 10), 3600);
-    db.prepare(`UPDATE deliveries SET status = 'pending', attempts = ?, next_attempt_at = ?,
-      last_error = ?, lease_until = NULL WHERE id = ?`)
-      .run(attempts, new Date(now.getTime() + delaySeconds * 1000).toISOString(), error.slice(0, 1000), id);
+    // 5s, 10s, 20s … capped at 1h (README: "5s → 1h").
+    const delaySeconds = Math.min(5 * 2 ** Math.min(Math.max(attempts - 1, 0), 10), 3600);
+    const changed = db.prepare(`UPDATE deliveries SET status = 'pending', attempts = ?, next_attempt_at = ?,
+      last_error = ?, lease_until = NULL WHERE id = ? AND status = 'sending' AND lease_until = ?`)
+      .run(attempts, new Date(now.getTime() + delaySeconds * 1000).toISOString(), error.slice(0, 1000), id, leaseUntil);
+    if (changed.changes === 0) return;
     const taskIdRow = db.prepare("SELECT task_id taskId FROM deliveries WHERE id = ?").get(id) as { taskId: string } | undefined;
     if (taskIdRow) db.prepare("UPDATE tasks SET last_error = ?, updated_at = ? WHERE id = ?")
       .run(error.slice(0, 1000), now.toISOString(), taskIdRow.taskId);

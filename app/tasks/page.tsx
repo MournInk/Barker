@@ -180,8 +180,21 @@ export default function TasksPage() {
 
   async function removeTask(task: Task) {
     if (!window.confirm(`删除「${task.name}」？待发送的提醒必须先推送成功。`)) return;
-    try { await api(`/api/tasks/${task.id}`, { method: "DELETE" }); await load(); }
-    catch (err) { setError(err instanceof Error ? err.message : "删除失败"); }
+    try {
+      await api(`/api/tasks/${task.id}`, { method: "DELETE" });
+      await load();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "删除失败";
+      // A task with permanently failing pushes can only be removed by force.
+      if (!message.includes("待重试")) { setError(message); return; }
+      if (!window.confirm(`「${task.name}」还有未推送成功的提醒。强制删除会丢弃这些提醒，确定继续？`)) return;
+      try {
+        await api(`/api/tasks/${task.id}?force=1`, { method: "DELETE" });
+        await load();
+      } catch (forceErr) {
+        setError(forceErr instanceof Error ? forceErr.message : "删除失败");
+      }
+    }
   }
 
   if (authed === null) {

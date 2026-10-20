@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { requestIsAuthorized } from "@/lib/auth";
 import { dataDirectory, readSettings, writeSettings } from "@/lib/db";
-import { jsonError, requestBody, validationMessage } from "@/lib/http";
+import { jsonError, jsonErrorFrom, jsonObjectBody, requestBody, requireSameOriginMutation, validationMessage } from "@/lib/http";
 import { settingsSchema } from "@/lib/validation";
 
 export const runtime = "nodejs";
@@ -16,16 +16,17 @@ export async function GET(request: Request): Promise<NextResponse> {
 
 export async function PUT(request: Request): Promise<NextResponse> {
   if (!requestIsAuthorized(request)) return jsonError("未授权", 401);
-  let body: unknown;
+  const blocked = requireSameOriginMutation(request);
+  if (blocked) return blocked;
+  let data: Record<string, unknown>;
   try {
-    body = await requestBody(request);
+    data = jsonObjectBody(await requestBody(request));
   } catch (error) {
-    return jsonError(error instanceof Error ? error.message : "请求内容无效", 400);
+    return jsonErrorFrom(error);
   }
-  const data = body as Record<string, unknown> | null;
   const previous = readSettings();
   // An empty or missing deviceKey keeps the stored one, so the form never needs to echo secrets back.
-  const candidate = data && typeof data === "object" && !(typeof data.deviceKey === "string" && data.deviceKey.trim())
+  const candidate = !(typeof data.deviceKey === "string" && data.deviceKey.trim())
     ? { ...data, deviceKey: previous.deviceKey }
     : data;
   const result = settingsSchema.safeParse(candidate);

@@ -1,27 +1,64 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 const AUTH_COOKIE = "barker_session";
 const SESSION_DURATION_SECONDS = 12 * 60 * 60;
+/** A shorter secret is guessable enough to forge session cookies / log in. */
+const MIN_SECRET_LENGTH = 16;
 const dataDir = resolve(process.env.BARKER_DATA_DIR || "./data");
 mkdirSync(dataDir, { recursive: true, mode: 0o700 });
 
-function loadOrCreateSecret(name: string, configuredValue?: string): string {
-  if (configuredValue?.trim()) return configuredValue.trim();
-  const path = join(dataDir, name);
+function readSecretFile(path: string): string {
   try {
     return readFileSync(path, "utf8").trim();
   } catch {
-    const generated = randomBytes(32).toString("base64url");
-    try {
-      writeFileSync(path, `${generated}\n`, { mode: 0o600, flag: "wx" });
-      return generated;
-    } catch {
-      if (existsSync(path)) return readFileSync(path, "utf8").trim();
+    return "";
+  }
+}
+
+function loadOrCreateSecret(name: string, configuredValue?: string): string {
+  const configured = configuredValue?.trim();
+  if (configured) {
+    if (configured.length < MIN_SECRET_LENGTH) {
+      throw new Error(`Barker secret ${name} must be at least ${MIN_SECRET_LENGTH} characters`);
+    }
+    return configured;
+  }
+
+  const path = join(dataDir, name);
+  const existing = readSecretFile(path);
+  if (existing.length >= MIN_SECRET_LENGTH) return existing;
+  if (existsSync(path)) {
+    // Fail fast instead of silently accepting an empty/truncated secret (an empty
+    // session secret lets anyone forge a valid cookie, an empty password lets
+    // anyone log in). A crash during first write is the realistic cause.
+    throw new Error(
+      `Barker secret file ${path} is empty or too short. Delete it and restart to regenerate a fresh secret.`,
+    );
+  }
+
+  const generated = randomBytes(32).toString("base64url");
+  const temporary = `${path}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
+  writeFileSync(temporary, `${generated}\n`, { mode: 0o600, flag: "wx" });
+  try {
+    // link() is atomic create-if-absent: concurrent workers all agree on the
+    // winner instead of each keeping its own secret.
+    linkSync(temporary, path);
+  } catch {
+    const winner = readSecretFile(path);
+    if (winner.length < MIN_SECRET_LENGTH) {
       throw new Error(`Unable to persist Barker secret ${name}`);
     }
+    return winner;
+  } finally {
+    try {
+      unlinkSync(temporary);
+    } catch {
+      // best effort cleanup of the temporary file
+    }
   }
+  return generated;
 }
 
 const runtimePassword = loadOrCreateSecret("access-password.txt", process.env.BARKER_PASSWORD);
@@ -140,9 +177,14 @@ export function clientKeyFor(request: Request): string {
 }
 
 export function requestUsesHttps(request: Request): boolean {
-  const forwarded = trustsProxyHeaders() ? request.headers.get("x-forwarded-proto")?.split(",")[0]?.trim() : undefined;
-  const protocol = forwarded || new URL(request.url).protocol.replace(":", "");
-  return protocol === "https";
+  // `request.url` is built by Next from x-forwarded-proto, i.e. attacker-spoofable,
+  // so never derive Secure-cookie decisions from it. Only an explicitly trusted
+  // proxy (or the BARKER_COOKIE_SECURE override) may claim HTTPS.
+  const forced = process.env.BARKER_COOKIE_SECURE?.trim().toLowerCase();
+  if (forced === "1" || forced === "true" || forced === "yes") return true;
+  if (!trustsProxyHeaders()) return false;
+  const forwarded = request.headers.get("x-forwarded-proto")?.split(",")[0]?.trim();
+  return forwarded === "https";
 }
 
 export function setSessionCookie(token: string, isHttps = false): string {

@@ -4,7 +4,7 @@
 
 > 运行时生成访问密码 · 墙钟 cron（`Asia/Shanghai`）· 每条到点提醒落库为 delivery · 失败指数退避无限重试绝不丢弃 · SQLite WAL 持久化
 
-Author: **MournInk** · Version: **0.4.1** · Node `>=24` · pnpm `>=12`（唯一包管理器）
+Author: **MournInk** · Version: **0.4.2** · Node `>=24` · pnpm `>=12`（唯一包管理器）
 
 ---
 
@@ -12,7 +12,7 @@ Author: **MournInk** · Version: **0.4.1** · Node `>=24` · pnpm `>=12`（唯�
 
 - **运行时密码授权**：未配置 `BARKER_PASSWORD` 时启动在日志打印随机密码（`🔐 Barker access password: ...`），登录后签发 `HttpOnly + SameSite=Lax` 12 小时会话；同客户端连续输错 5 次锁定 10 分钟；支持 `BARKER_TRUST_PROXY` 受控信任反代头。
 - **任务管理**：名称、解释（可空）、开始时间、周期预设（每天 / 每周 / 每月，按 `Asia/Shanghai` 墙钟生成 cron）或自定义五段 cron；结束条件二选一：重复次数或截止日期。
-- **可靠推送**：每个到点时刻写入 `deliveries`，`claim → sending (2 min 租约) → pending/sent` 状态机；失败按 `5s * 2^attempt` 指数退避（上限 1h）**无限重试**，服务重启自动续传，暂停 / 恢复 / 编辑会补排所有错过的 occurrence。
+- **可靠推送**：每个到点时刻写入 `deliveries`，`claim → sending (2 min 租约) → pending/sent` 状态机（租约带 token，过期 worker 的迟到回写会被拒绝，避免重复推送）；失败按 5s、10s、20s… 逐次翻倍退避（上限 1h）**无限重试**，服务重启自动续传，暂停 / 恢复 / 编辑会补排所有错过的 occurrence；遇到永久性拒绝（错误的 Device Key、Bark 应用被删、404 等）连续 5 次后自动暂停任务，避免空转打爆接口。
 - **Bark 自配置**：`endpoint / deviceKey / title / sound / group / icon`，`deviceKey` 留空保持不变，一键发送测试推送。
 - **简约扁平界面**：Tailwind CSS 4 + shadcn/ui 组件层（zinc 中性色、1px 描边、无阴影 / 渐变）；顶部导航 + 居中内容区，`/` 概览 · `/tasks` 任务列表（8 条/页分页、状态与关键词筛选、弹窗式新建/编辑）· `/settings` 配置页；320px 起自适应，5s 轮询与服务端调度器保持一致。
 
@@ -41,19 +41,19 @@ docker logs -f barker   # 未设 BARKER_PASSWORD 时在此查看随机密码
 ### 方式 B：docker run
 
 ```bash
-docker build -t barker:0.4.1 .
+docker build -t barker:0.4.2 .
 
 # 命名卷
 docker run -d --name barker -p 3000:3000 \
   -v barker-data:/app/data \
-  barker:0.4.1
+  barker:0.4.2
 
 # 或绑定宿主机目录
 mkdir -p ./data
 docker run -d --name barker -p 3000:3000 \
   -v "$PWD/data:/app/data" \
   -e BARKER_PASSWORD=change-me \
-  barker:0.4.1
+  barker:0.4.2
 
 docker logs barker
 ```
@@ -62,7 +62,7 @@ docker logs barker
 
 `Dockerfile` 为三阶段构建：`deps → builder (pnpm run build) → runner`，`runner` 仅含 `.next/standalone` + `.next/static`，以 `nextjs` 非 root 用户运行，`HEALTHCHECK` 每 30s 探测 `GET /api/session`。
 
-镜像标签：正式版本由 CI 推送到 `ghcr.io/mournink/barker`（`0.4.0` / `0.4` / `latest`）；本地构建用 `docker build -t barker:0.4.1 .`。`deps` 阶段会把 `package.json`、`pnpm-lock.yaml`、`pnpm-workspace.yaml` 一起拷入，确保 `pnpm install --frozen-lockfile` 能按 `allowBuilds` 放行原生构建脚本。
+镜像标签：正式版本由 CI 推送到 `ghcr.io/mournink/barker`（`0.4.2` / `0.4` / `latest`）；本地构建用 `docker build -t barker:0.4.2 .`。`deps` 阶段会把 `package.json`、`pnpm-lock.yaml`、`pnpm-workspace.yaml` 一起拷入，确保 `pnpm install --frozen-lockfile` 能按 `allowBuilds` 放行原生构建脚本。
 
 ---
 
@@ -74,6 +74,7 @@ docker logs barker
 | `BARKER_SESSION_SECRET` | 否 | 写入 `data/session-secret.txt` | 会话签名密钥，首次生成后持久化 |
 | `BARKER_DATA_DIR` | 否 | `./data`（容器内 `/app/data`） | SQLite 与密钥文件目录 |
 | `BARKER_TRUST_PROXY` | 否 | 空（不信任） | 设为 `1/true/yes` 时才信任 `X-Forwarded-* / X-Real-IP` 用于限流与 `Secure` 判定；直连公网时切勿开启 |
+| `BARKER_COOKIE_SECURE` | 否 | 空 | 设为 `1/true/yes` 时强制会话 Cookie 带 `Secure`（TLS 在 Barker 之外终止、又未开启 `BARKER_TRUST_PROXY` 时使用） |
 | `PORT` | 否 | `3000` | 监听端口 |
 | `HOSTNAME` | 否 | `0.0.0.0` | 监听地址 |
 | `TZ` | 否 | `Asia/Shanghai` | 容器与调度时区，`Dockerfile`/`compose` 已设为上海时区 |
@@ -87,6 +88,8 @@ docker logs barker
 - 默认 `./data/barker.sqlite`（WAL + `busy_timeout=10000`），`tasks / deliveries / settings` 全量持久化。
 - `instrumentation.ts` 启动调度器：每 2s 执行 `enqueueDueOccurrences + processOneDelivery(最多 20 条)`，空闲 `timer.unref()` 不阻止退出。
 - 任务删除前所有 `delivery` 必须为 `sent`，否则返回 `409` 并提示「请等发送成功后再删除」；积压 `>500` 条时操作会提示等待调度器补排而非丢弃。
+
+删除任务前所有 `delivery` 必须已 `sent`；若推送因永久性错误永远无法成功，删除确认框中会提供「强制删除」二次确认（`DELETE /api/tasks/:id?force=1`），显式丢弃该任务积压的提醒。
 
 备份：直接拷贝 `data/barker.sqlite*`（含 `-wal/-shm`）或快照命名卷。
 
@@ -159,7 +162,7 @@ CI 在推送 `v*` 版本标签时自动执行同一组校验，并构建多架�
 Docker 冒烟：
 
 ```bash
-docker run -d --name barker-smoke -p 3001:3000 barker:0.4.1
+docker run -d --name barker-smoke -p 3001:3000 barker:0.4.2
 curl -i http://localhost:3001/api/session  # 200 {"authenticated":false}
 docker rm -f barker-smoke
 ```
@@ -172,14 +175,14 @@ docker rm -f barker-smoke
 2. 提交后打标签并推送（标签即版本创建动作）：
 
 ```bash
-git tag -a v0.4.1 -m "0.4.1"
-git push origin v0.4.1
+git tag -a v0.4.2 -m "0.4.2"
+git push origin v0.4.2
 ```
 
 3. [`.github/workflows/release.yml`](.github/workflows/release.yml) 自动执行：
-   - 版本一致性守卫：标签 `v0.4.1` 必须等于 `package.json` 的 `version`，否则失败；
+   - 版本一致性守卫：标签 `v0.4.2` 必须等于 `package.json` 的 `version`，否则失败；
    - 校验：`pnpm install --frozen-lockfile` → `typecheck` → `lint` → `test` → `build`；
-   - 发布：构建 `linux/amd64` + `linux/arm64` 镜像并推送 `ghcr.io/mournink/barker`，标签为 `0.4.1` / `0.4` / `latest`（预发布版本不带 `latest`）。
+   - 发布：构建 `linux/amd64` + `linux/arm64` 镜像并推送 `ghcr.io/mournink/barker`，标签为 `0.4.2` / `0.4` / `latest`（预发布版本不带 `latest`）。
 
 `workflow_dispatch` 可手动触发同一套校验，但不会推送镜像；流水线需要 `packages: write` 权限（工作流已声明）。
 
@@ -191,12 +194,19 @@ git push origin v0.4.1
 
 **Q: Bark 推送失败会丢失吗？** 不会。失败记录 `attempts/lastError/nextAttemptAt` 并按 5s→1h 退避无限重试，`/api/overview` 的 `retryQueue` 可见。
 
+**Q: 任务被自动暂停了？** 连续 5 次永久性拒绝（例如 Device Key 填错、Bark 应用被删）后任务会自动暂停并记录最后错误，修好设置后点「恢复」即可继续排队与推送。
+
+**Q: 删除任务提示「请等发送成功后再删除」？** 说明还有未送达的提醒；若确认不再需要，在第二次确认中选择强制删除。
+
+**Q: 「每月」预设为什么 2 月没有触发？** 每月预设按标准 cron 的日历日触发，29–31 日在短月自动跳过；需要「每月最后一天」这类语义请用自定义 cron（如 `0 9 L * *`）。
+
 **Q: 端口冲突？** 修改 `docker-compose.yml` 的 `ports: ["3001:3000"]` 或设置 `PORT`。
 
 ---
 
 ## 版本
 
+- `0.4.2` — 后端加固：请求体上限 64KB（此前可被未认证的大 JSON 撑爆内存）、仅接受同源 JSON 变更请求、登录时间与响应头安全化（`poweredByHeader:false`、`Cache-Control: no-store`、安全响应头）；校验层不再抛 500（无效日期、`https://` 之类半成品 URL、带查询串/锚点的 endpoint、异常图标与控制字符统一 400）；Bark 客户端区分永久/瞬时失败（2xx 非 JSON、字符串 code、4xx 分类）；投递状态机修复：编辑恰好落在到点分钟不再少发一次、发送租约带 token 拒绝迟到回写、租约按真实时间下发、崩溃回收计一次尝试、`sending` 计入待推送统计、退避从 5s 起算、损坏 settings 回退默认值、超过 500 条积压时暂停/恢复不再死锁、恢复后由调度器分批排空；tasks 分页参数越界返回 400；密钥文件为空/过短时启动即报错（不再静默允许空密码登录或伪造会话）。
 - `0.4.1` — 仓库卫生：`.gitignore` 对齐 Next 16 官方模板并忽略自动生成的 `next-env.d.ts`（该文件在 `next dev` 与 `next build` 下内容不同，此前会造成工作区常驻改动与误提交风险），补充 `coverage` / `build` / `.vercel` / `*.pem` / `.pnp*` 等忽略项；CI 在 typecheck 前增加 `next typegen`，保证干净检出下类型定义齐全。
 - `0.4.0` — 前端重构：迁移至 Tailwind CSS 4 + shadcn/ui（11 个基础组件：button / card / dialog / select / badge / alert 等），以顶部导航 + 居中内容区的简约扁平界面替换原深色侧边栏；概览统计合并为单卡片、任务列表改为单卡分节行 + 弹窗式表单、分页 / 空态 / 设置页视觉重做；修复移动端首屏密度、只读 Cron 可读性、320px 导航裁切、短屏弹窗滚动（底部按钮固定）等问题。
 - `0.3.2` — 工程化收尾：以 pnpm 为唯一包管理器（移除 npm 锁文件与未被引用的 tailwind/postcss 依赖，新增 `pnpm-workspace.yaml` 放行原生构建脚本）、`eslint-config-next` 升至 16 并改用原生 flat config、修复 React 19 新 lint 规则下的前端问题与设置页数据目录显示、限流记录有界化、新增 `v*` 标签触发的发布流水线（校验 + 多架构 GHCR 镜像）。

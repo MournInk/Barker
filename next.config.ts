@@ -2,7 +2,27 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   output: "standalone",
+  poweredByHeader: false,
   turbopack: {},
+  async headers() {
+    return [
+      {
+        source: "/:path*",
+        headers: [
+          { key: "X-Content-Type-Options", value: "nosniff" },
+          { key: "X-Frame-Options", value: "DENY" },
+          { key: "Referrer-Policy", value: "no-referrer" },
+          { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=()" },
+        ],
+      },
+      {
+        // Task/settings/overview responses contain live state and are re-fetched
+        // every 5s; never let a proxy or browser reuse them.
+        source: "/api/:path*",
+        headers: [{ key: "Cache-Control", value: "no-store" }],
+      },
+    ];
+  },
   webpack: (config, { nextRuntime }) => {
     // This hook only applies to webpack builds (`next build --webpack`);
     // Turbopack builds never invoke it. instrumentation.ts is also bundled by
