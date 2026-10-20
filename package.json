@@ -1,6 +1,6 @@
 {
   "name": "barker",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "前后端一体的 Next.js 定时提醒小工具，按 cron 周期将提醒可靠推送到自建 Bark API。",
   "author": "MournInk",
   "private": true,
