@@ -103,8 +103,24 @@ export function requestIsAuthorized(request: Request): boolean {
   return isValidSessionToken(getCookieValue(request.headers.get("cookie")));
 }
 
+export function trustsProxyHeaders(): boolean {
+  const value = process.env.BARKER_TRUST_PROXY?.trim().toLowerCase();
+  return value === "1" || value === "true" || value === "yes";
+}
+
+export function clientKeyFor(request: Request): string {
+  if (trustsProxyHeaders()) {
+    const realIp = request.headers.get("x-real-ip")?.trim();
+    if (realIp) return realIp;
+    const forwarded = request.headers.get("x-forwarded-for")?.split(",").at(-1)?.trim();
+    if (forwarded) return forwarded;
+  }
+  return "local";
+}
+
 export function requestUsesHttps(request: Request): boolean {
-  const protocol = request.headers.get("x-forwarded-proto")?.split(",")[0]?.trim() || new URL(request.url).protocol.replace(":", "");
+  const forwarded = trustsProxyHeaders() ? request.headers.get("x-forwarded-proto")?.split(",")[0]?.trim() : undefined;
+  const protocol = forwarded || new URL(request.url).protocol.replace(":", "");
   return protocol === "https";
 }
 

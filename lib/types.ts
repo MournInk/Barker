@@ -1,6 +1,6 @@
 export type RecurrencePreset = "daily" | "weekly" | "monthly" | "custom";
 
-export type TaskStatus = "active" | "paused" | "completed" | "failed";
+export type TaskStatus = "active" | "paused" | "completed";
 
 export interface Task {
   id: string;

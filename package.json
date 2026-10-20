@@ -1,14 +1,14 @@
 {
   "name": "barker",
-  "version": "0.1.0",
+  "version": "0.2.0",
+  "description": "前后端一体的 Next.js 定时提醒小工具，按 cron 周期将提醒可靠推送到自建 Bark API。",
+  "author": "MournInk",
   "private": true,
   "engines": {
     "node": ">=24.0.0"
   },
   "scripts": {
-    "predev": "node scripts/emit-node-runtime.mjs",
     "dev": "TZ=Asia/Shanghai next dev",
-    "prebuild": "node scripts/emit-node-runtime.mjs",
     "build": "next build",
     "start": "TZ=Asia/Shanghai next start",
     "lint": "eslint .",
@@ -18,20 +18,20 @@
   },
   "dependencies": {
     "croner": "^10.0.1",
-    "lucide-react": "0.468.0",
-    "next": "15.5.28",
-    "react": "19.2.0",
-    "react-dom": "19.2.0",
-    "zod": "4.1.12"
+    "lucide-react": "^1.59.0",
+    "next": "^16.4.2",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@eslint/eslintrc": "3.3.1",
-    "@types/node": "24.7.2",
-    "@types/react": "19.1.16",
-    "@types/react-dom": "19.1.9",
-    "eslint": "9.39.0",
-    "eslint-config-next": "15.5.28",
-    "tsx": "4.20.6",
-    "typescript": "5.9.3"
+    "@eslint/eslintrc": "^3.3.7",
+    "@types/node": "^24.7.2",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "eslint": "^9.39.0",
+    "eslint-config-next": "^15.5.28",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3"
   }
 }

@@ -30,7 +30,20 @@ test("repeated failures lock a client temporarily", () => {
 test("session cookies follow HTTP or HTTPS and malformed cookies are ignored", () => {
   assert.equal(auth.getCookieValue("barker_session=%bad"), null);
   assert.equal(auth.requestUsesHttps(new Request("http://localhost:3000")), false);
-  assert.equal(auth.requestUsesHttps(new Request("http://localhost:3000", { headers: { "x-forwarded-proto": "https" } })), true);
   assert.doesNotMatch(auth.setSessionCookie("abc"), /Secure/);
   assert.match(auth.setSessionCookie("abc", true), /Secure/);
+});
+
+test("proxy headers are ignored unless explicitly trusted", () => {
+  const request = new Request("http://localhost:3000", {
+    headers: { "x-forwarded-proto": "https", "x-forwarded-for": "1.2.3.4, 5.6.7.8", "x-real-ip": "9.9.9.9" },
+  });
+  delete process.env.BARKER_TRUST_PROXY;
+  assert.equal(auth.requestUsesHttps(request), false);
+  assert.equal(auth.clientKeyFor(request), "local");
+  process.env.BARKER_TRUST_PROXY = "1";
+  assert.equal(auth.requestUsesHttps(request), true);
+  assert.equal(auth.clientKeyFor(request), "9.9.9.9");
+  assert.equal(auth.clientKeyFor(new Request("http://localhost:3000", { headers: { "x-forwarded-for": "1.2.3.4, 5.6.7.8" } })), "5.6.7.8");
+  delete process.env.BARKER_TRUST_PROXY;
 });

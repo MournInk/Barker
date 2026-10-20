@@ -23,7 +23,10 @@ export async function PUT(request: Request): Promise<NextResponse> {
   }
   const data = body as Record<string, unknown> | null;
   const previous = readSettings();
-  const candidate = data && typeof data === "object" && !data.deviceKey ? { ...data, deviceKey: previous.deviceKey } : data;
+  // An empty or missing deviceKey keeps the stored one, so the form never needs to echo secrets back.
+  const candidate = data && typeof data === "object" && !(typeof data.deviceKey === "string" && data.deviceKey.trim())
+    ? { ...data, deviceKey: previous.deviceKey }
+    : data;
   const result = settingsSchema.safeParse(candidate);
   if (!result.success) return jsonError(validationMessage(result.error), 400);
   const settings = { ...previous, ...result.data };

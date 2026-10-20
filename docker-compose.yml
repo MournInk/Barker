@@ -1,0 +1,20 @@
+services:
+  barker:
+    build: .
+    image: ghcr.io/mournink/barker:0.2.0
+    container_name: barker
+    ports:
+      - "3000:3000"
+    environment:
+      # Optional. If omitted, a random password is generated and printed in logs.
+      # BARKER_PASSWORD: change-me
+      # BARKER_SESSION_SECRET: change-me
+      TZ: Asia/Shanghai
+      BARKER_DATA_DIR: /app/data
+      # BARKER_TRUST_PROXY: "1" # enable only behind a trusted reverse proxy
+    volumes:
+      - barker-data:/app/data
+    restart: unless-stopped
+
+volumes:
+  barker-data:

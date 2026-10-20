@@ -32,7 +32,7 @@ export const settingsSchema = z.object({
     const url = new URL(value);
     return ["https:", "http:"].includes(url.protocol) && !url.username && !url.password;
   }, "Bark API 地址必须使用 HTTP(S)，且不能包含用户名或密码"),
-  deviceKey: z.string().trim().min(1, "Bark Device Key 不能为空").max(300),
+  deviceKey: z.string().trim().max(300).optional().default(""),
   title: z.string().trim().min(1).max(100),
   sound: z.string().trim().max(80),
   group: z.string().trim().max(100),

@@ -1,7 +1,7 @@
 "use client";
 
-import { Bell, Pause, Play, Trash2 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import { Bell, LogOut, Pause, Pencil, Play, Plus, RefreshCw, Send, Trash2 } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { presetCron } from "@/lib/cron";
 import type { BarkSettings, RecurrencePreset, Task, TaskStatus } from "@/lib/types";
 
@@ -10,7 +10,7 @@ type Overview = {
   tasks: Task[];
   settings: Omit<BarkSettings, "deviceKey">;
   deviceKeyConfigured: boolean;
-  deliveries: { pending: number; retrying: number; failed: number; nextRetryAt: string | null };
+  deliveries: { pending: number; retrying: number; nextRetryAt: string | null };
   retryQueue: Array<{ taskId: string; taskName: string; occurrenceAt: string; attempts: number; lastError: string | null; nextAttemptAt: string }>;
 };
 
@@ -22,7 +22,7 @@ const PRESETS: Array<{ value: RecurrencePreset; label: string }> = [
 ];
 
 const STATUS_LABEL: Record<TaskStatus, string> = {
-  active: "运行中", paused: "已暂停", completed: "已完成", failed: "失败",
+  active: "运行中", paused: "已暂停", completed: "已完成",
 };
 
 function localInputValue(date = new Date()): string {
@@ -36,8 +36,13 @@ function toOffsetDateTime(value: string): string {
 
 function formatTime(value: string | null): string {
   if (!value) return "—";
+  const withYear = new Intl.DateTimeFormat("zh-CN", { timeZone: "Asia/Shanghai", year: "numeric" });
+  const targetYear = withYear.format(new Date(value));
+  const currentYear = withYear.format(new Date());
   return new Intl.DateTimeFormat("zh-CN", {
-    timeZone: "Asia/Shanghai", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit",
+    timeZone: "Asia/Shanghai",
+    ...(targetYear !== currentYear ? { year: "numeric" as const } : {}),
+    month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit",
   }).format(new Date(value));
 }
 
@@ -56,12 +61,13 @@ export default function HomePage() {
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const settingsLoaded = useRef(false);
   const [preset, setPreset] = useState<RecurrencePreset>("daily");
   const [startsAt, setStartsAt] = useState(localInputValue());
   const [cron, setCron] = useState("0 9 * * *");
   const [limitMode, setLimitMode] = useState<LimitMode>("count");
   const [repeatCount, setRepeatCount] = useState("30");
-  const [endDate, setEndDate] = useState(localInputValue().slice(0, 10));
+  const [endDate, setEndDate] = useState(localInputValue(new Date(Date.now() + 86_400_000)).slice(0, 10));
   const [settings, setSettings] = useState({ endpoint: "https://api.day.app", deviceKey: "", title: "Barker 提醒", sound: "1107", group: "Barker", icon: "" });
 
   const generatedCron = useMemo(() => {
@@ -72,13 +78,27 @@ export default function HomePage() {
   const load = useCallback(async () => {
     const session = await api<{ authenticated: boolean }>("/api/session");
     setAuthenticated(session.authenticated);
-    if (!session.authenticated) return;
+    if (!session.authenticated) {
+      setOverview(null);
+      settingsLoaded.current = false;
+      return;
+    }
     const data = await api<Overview>("/api/overview");
     setOverview(data);
-    setSettings((current) => ({ ...current, ...data.settings, deviceKey: current.deviceKey }));
+    if (!settingsLoaded.current) {
+      setSettings((current) => ({ ...current, ...data.settings, deviceKey: "" }));
+      settingsLoaded.current = true;
+    }
   }, []);
 
   useEffect(() => { void load().catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "无法加载")); }, [load]);
+
+  // Keep the board in sync with the server-side scheduler (retries, counts, next runs).
+  useEffect(() => {
+    if (!authenticated) return;
+    const timer = setInterval(() => { void load().catch(() => undefined); }, 5_000);
+    return () => clearInterval(timer);
+  }, [authenticated, load]);
 
   function beginEdit(task: Task) {
     setEditing(task);
@@ -88,6 +108,7 @@ export default function HomePage() {
     setLimitMode(task.repeatCount ? "count" : "date");
     setRepeatCount(String(task.repeatCount ?? 30));
     setEndDate(task.endDate ?? localInputValue().slice(0, 10));
+    document.getElementById("task-form")?.scrollIntoView({ behavior: "smooth" });
   }
 
   async function signIn(event: FormEvent) {
@@ -104,7 +125,8 @@ export default function HomePage() {
 
   async function saveTask(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const form = new FormData(event.currentTarget);
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
     const payload = {
       name: String(form.get("name") || ""),
       description: String(form.get("description") || ""),
@@ -120,7 +142,7 @@ export default function HomePage() {
         method: editing ? "PUT" : "POST", body: JSON.stringify(payload),
       });
       setEditing(null);
-      event.currentTarget.reset();
+      formElement.reset();
       setMessage(editing ? "任务已更新" : "任务已创建");
       await load();
     } catch (reason) {
@@ -129,8 +151,13 @@ export default function HomePage() {
   }
 
   async function changeStatus(task: Task) {
-    await api(`/api/tasks/${task.id}`, { method: "PATCH", body: JSON.stringify({ status: task.status === "paused" ? "active" : "paused" }) });
-    await load();
+    setError("");
+    try {
+      await api(`/api/tasks/${task.id}`, { method: "PATCH", body: JSON.stringify({ status: task.status === "paused" ? "active" : "paused" }) });
+      await load();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "状态更新失败");
+    }
   }
 
   async function removeTask(task: Task) {
@@ -158,14 +185,25 @@ export default function HomePage() {
     finally { setBusy(false); }
   }
 
+  async function signOut() {
+    setError("");
+    try {
+      await api("/api/session", { method: "DELETE" });
+      setAuthenticated(false);
+      setOverview(null);
+      settingsLoaded.current = false;
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "退出失败");
+    }
+  }
+
   if (authenticated === null) return <main className="gate"><p className="muted">正在确认访问权限…</p></main>;
   if (!authenticated) {
     return (
       <main className="gate">
         <form className="card stack" onSubmit={signIn}>
           <div className="brand"><span className="mark"><Bell size={22} /></span><div><p className="eyebrow">Barker</p><h1>输入启动密码</h1></div></div>
-          <p className="muted">密码在服务启动时生成，并打印在运行日志中。也可通过环境变量指定。</p>
-          <label>访问密码<input type="password" autoFocus value={password} onChange={(event) => setPassword(event.target.value)} /></label>
+          <label>启动日志中的访问密码<input type="password" autoFocus value={password} onChange={(event) => setPassword(event.target.value)} /></label>
           {error && <p className="error">{error}</p>}
           <button className="button" disabled={busy}>进入</button>
         </form>
@@ -176,28 +214,28 @@ export default function HomePage() {
   return (
     <main className="app">
       <header className="topbar">
-        <div className="brand"><span className="mark"><Bell size={22} /></span><div><p className="eyebrow">Shanghai time</p><h1>Barker</h1></div></div>
-        <button className="ghost" onClick={() => void api("/api/session", { method: "DELETE" }).then(() => setAuthenticated(false))}>退出</button>
+        <div className="brand"><span className="mark"><Bell size={22} /></span><div><p className="eyebrow">北京时间</p><h1>Barker</h1></div></div>
+        <button className="ghost icon-button" title="退出登录" aria-label="退出登录" onClick={() => void signOut()}><LogOut size={18} /></button>
       </header>
       {message && <p className="notice">{message}</p>}
       {error && <p className="error">{error}</p>}
       <div className="grid">
-        <section className="stack">
-          <form className="card stack" onSubmit={saveTask}>
+        <section className="editor stack">
+          <form className="card stack" id="task-form" onSubmit={saveTask}>
             <h2>{editing ? "编辑任务" : "新建任务"}</h2>
             <label>名称<input name="name" required maxLength={80} defaultValue={editing?.name ?? ""} key={editing?.id ?? "new"} /></label>
             <label>解释<textarea name="description" maxLength={500} defaultValue={editing?.description ?? ""} key={`${editing?.id ?? "new"}-description`} /></label>
             <label>开始时间<input type="datetime-local" required value={startsAt} onChange={(event) => setStartsAt(event.target.value)} /></label>
             <div className="choice" role="group" aria-label="周期预设">
-              {PRESETS.map((item) => <button type="button" className={preset === item.value ? "button" : "ghost"} key={item.value} onClick={() => setPreset(item.value)}>{item.label}</button>)}
+              {PRESETS.map((item) => <button type="button" className={preset === item.value ? "selected" : ""} aria-pressed={preset === item.value} key={item.value} onClick={() => setPreset(item.value)}>{item.label}</button>)}
             </div>
             <label>Cron{preset === "custom"
               ? <input value={cron} onChange={(event) => setCron(event.target.value)} required />
               : <input value={generatedCron} readOnly />}
             </label>
-            <div className="choice">
-              <button type="button" className={limitMode === "count" ? "button" : "ghost"} onClick={() => setLimitMode("count")}>重复次数</button>
-              <button type="button" className={limitMode === "date" ? "button" : "ghost"} onClick={() => setLimitMode("date")}>截止日期</button>
+            <div className="choice" role="group" aria-label="结束条件">
+              <button type="button" className={limitMode === "count" ? "selected" : ""} aria-pressed={limitMode === "count"} onClick={() => setLimitMode("count")}>重复次数</button>
+              <button type="button" className={limitMode === "date" ? "selected" : ""} aria-pressed={limitMode === "date"} onClick={() => setLimitMode("date")}>截止日期</button>
             </div>
             {limitMode === "count"
               ? <label>次数<input type="number" min={1} value={repeatCount} onChange={(event) => setRepeatCount(event.target.value)} required /></label>
@@ -220,12 +258,13 @@ export default function HomePage() {
               <label>分组<input value={settings.group} onChange={(event) => setSettings({ ...settings, group: event.target.value })} /></label>
               <label>图标 URL<input value={settings.icon} onChange={(event) => setSettings({ ...settings, icon: event.target.value })} /></label>
             </div>
-            <div className="actions"><button className="button" disabled={busy}>保存配置</button><button type="button" className="ghost" disabled={busy} onClick={() => void testBark()}>发送测试</button></div>
+            <div className="actions"><button className="button" disabled={busy}>保存配置</button><button type="button" className="ghost" disabled={busy} onClick={() => void testBark()}><Send size={16} />发送测试</button></div>
           </form>
         </section>
-        <section className="card">
-          <div className="row" style={{ justifyContent: "space-between" }}>
-            <h2>任务</h2><button className="ghost" onClick={() => void load()}>刷新</button>
+        <section className="task-panel">
+          <div className="panel-heading row">
+            <div><p className="eyebrow">任务概览</p><h2>提醒任务</h2></div>
+            <div className="actions"><button className="ghost icon-button" title="刷新任务" aria-label="刷新任务" onClick={() => void load()}><RefreshCw size={17} /></button><button className="button mobile-add" onClick={() => document.getElementById("task-form")?.scrollIntoView({ behavior: "smooth" })}><Plus size={17} />新建</button></div>
           </div>
           <div className="stats">
             <div className="stat"><span className="muted">待推送</span><strong>{overview?.deliveries.pending ?? 0}</strong></div>
@@ -241,7 +280,7 @@ export default function HomePage() {
               <p className="meta muted"><span>{PRESETS.find((item) => item.value === task.preset)?.label}</span><code>{task.cron}</code><span>已发送 {task.sentCount}{task.repeatCount ? ` / ${task.repeatCount}` : ""}</span></p>
               <p className="muted">下次 {formatTime(task.nextRunAt)} · 截止 {task.endDate ?? "按次数"}{task.lastError ? ` · ${task.lastError}` : ""}</p>
               <div className="actions">
-                <button className="ghost" onClick={() => beginEdit(task)} disabled={task.status === "completed"}>编辑</button>
+                <button className="ghost" onClick={() => beginEdit(task)} disabled={task.status === "completed"}><Pencil size={16} />编辑</button>
                 {task.status !== "completed" && <button className="ghost" onClick={() => void changeStatus(task)}>{task.status === "paused" ? <Play size={16} /> : <Pause size={16} />}{task.status === "paused" ? "恢复" : "暂停"}</button>}
                 <button className="danger" onClick={() => void removeTask(task)}><Trash2 size={16} />删除</button>
               </div>

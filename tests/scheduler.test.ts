@@ -55,12 +55,12 @@ test("pause, update and delete preserve pending deliveries", async () => {
   assert.equal(await scheduler.enqueueDueOccurrences(new Date("2026-10-19T01:30:00Z")), 0);
   db.setTaskStatus(task.id, "active", new Date("2026-10-18T00:00:00Z"));
   await scheduler.enqueueDueOccurrences(new Date("2026-10-19T01:30:00Z"));
-  assert.throws(() => db.deleteTask(task.id), /待重试/);
+  assert.throws(() => db.deleteTask(task.id, new Date("2026-10-20T00:00:00Z")), /待重试/);
   const updated = db.updateTask(task.id, { ...taskInput(3), name: "Renamed" }, new Date("2026-10-20T00:00:00Z"));
   assert.equal(updated?.name, "Renamed");
   assert.equal(db.deliverySummary().pending, 1);
   await scheduler.processOneDelivery(new Date("2030-10-20T01:30:00Z"), async () => {});
-  assert.equal(db.deleteTask(task.id), true);
+  assert.equal(db.deleteTask(task.id, new Date("2026-10-20T00:00:00Z")), true);
 });
 
 test("pausing after the due minute still queues that occurrence", async () => {
@@ -84,5 +84,35 @@ test("cutoff date completes scheduling but leaves final delivery queued", async 
   const task = db.createTask({ ...taskInput(null), endDate: "2026-10-19" }, new Date("2026-10-18T00:00:00Z"));
   await scheduler.enqueueDueOccurrences(new Date("2026-10-19T01:30:00Z"));
   assert.equal(db.getTask(task.id)?.status, "completed");
+  assert.equal(db.deliverySummary().pending, 1);
+});
+
+test("pausing after several missed runs queues every due reminder", () => {
+  const task = db.createTask(taskInput(5), new Date("2026-10-18T00:00:00Z"));
+  const paused = db.setTaskStatus(task.id, "paused", new Date("2026-10-21T01:30:00Z"));
+  assert.equal(db.deliverySummary().pending, 3);
+  assert.equal(paused?.status, "paused");
+  assert.equal(paused?.nextRunAt, "2026-10-22T01:30:00.000Z");
+});
+
+test("editing after a due run queues it before moving the schedule", () => {
+  const task = db.createTask(taskInput(3), new Date("2026-10-18T00:00:00Z"));
+  const updated = db.updateTask(task.id, { ...taskInput(3), name: "Updated" }, new Date("2026-10-19T01:30:00Z"));
+  assert.equal(updated?.name, "Updated");
+  assert.equal(db.deliverySummary().pending, 1);
+  assert.equal(updated?.lastRunAt, "2026-10-19T01:30:00.000Z");
+});
+
+test("deleting at a due minute cannot discard an unqueued reminder", () => {
+  const task = db.createTask(taskInput(3), new Date("2026-10-18T00:00:00Z"));
+  assert.throws(() => db.deleteTask(task.id, new Date("2026-10-19T01:30:00Z")), /待重试/);
+  assert.ok(db.getTask(task.id));
+  assert.equal(db.getTask(task.id)?.nextRunAt, "2026-10-19T01:30:00.000Z");
+});
+
+test("pausing at the final occurrence preserves the completed status", () => {
+  const task = db.createTask(taskInput(1), new Date("2026-10-18T00:00:00Z"));
+  const result = db.setTaskStatus(task.id, "paused", new Date("2026-10-19T01:30:00Z"));
+  assert.equal(result?.status, "completed");
   assert.equal(db.deliverySummary().pending, 1);
 });
