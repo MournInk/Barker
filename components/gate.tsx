@@ -2,6 +2,10 @@
 
 import { Bell } from "lucide-react";
 import { useState, type FormEvent } from "react";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { api } from "@/lib/ui";
 
 export function Gate({ onAuthed }: { onAuthed: () => void }) {
@@ -25,25 +29,52 @@ export function Gate({ onAuthed }: { onAuthed: () => void }) {
   }
 
   return (
-    <main className="gate">
-      <form className="card stack" onSubmit={signIn}>
-        <div style={{ display: "flex", gap: 11, alignItems: "center" }}>
-          <span style={{ width: 40, height: 40, display: "grid", placeItems: "center", borderRadius: 10, background: "var(--accent)", color: "#fff" }}>
-            <Bell size={20} />
-          </span>
-          <div>
-            <p className="eyebrow">Barker</p>
-            <h1>输入启动密码</h1>
+    <main className="grid min-h-screen place-items-center px-4">
+      <Card className="w-full max-w-sm p-6">
+        <form onSubmit={signIn} className="space-y-5">
+          <div className="flex items-center gap-3">
+            <span className="grid size-9 shrink-0 place-items-center rounded-md bg-primary text-primary-foreground">
+              <Bell className="size-4" />
+            </span>
+            <div className="min-w-0">
+              <h1 className="text-base font-medium">输入访问密码</h1>
+              <p className="text-xs text-muted-foreground">Barker · 北京时间可靠提醒</p>
+            </div>
           </div>
-        </div>
-        <label>
-          启动日志中的访问密码
-          <input type="password" autoFocus value={password} onChange={(e) => setPassword(e.target.value)} />
-        </label>
-        {error && <p className="error">{error}</p>}
-        <button className="button" disabled={busy}>进入</button>
-        <p className="helper">密码在 `docker logs` / 服务启动日志中打印，也可通过 `BARKER_PASSWORD` 固定。</p>
-      </form>
+
+          <div className="space-y-2">
+            <Label htmlFor="access-password" className="text-xs text-muted-foreground">
+              访问密码
+            </Label>
+            <Input
+              id="access-password"
+              type="password"
+              autoFocus
+              autoComplete="current-password"
+              aria-label="访问密码"
+              placeholder="••••••••"
+              value={password}
+              disabled={busy}
+              onChange={(e) => setPassword(e.target.value)}
+            />
+          </div>
+
+          {error && (
+            <p role="alert" className="text-sm text-destructive">
+              {error}
+            </p>
+          )}
+
+          <Button type="submit" className="w-full" disabled={busy}>
+            {busy ? "验证中…" : "进入"}
+          </Button>
+
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            密码在服务启动日志（<code className="font-mono">docker logs</code>）中打印，也可通过{" "}
+            <code className="font-mono">BARKER_PASSWORD</code> 固定。
+          </p>
+        </form>
+      </Card>
     </main>
   );
 }

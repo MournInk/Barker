@@ -1,6 +1,7 @@
 "use client";
 
 import { ChevronLeft, ChevronRight } from "lucide-react";
+import { Button } from "@/components/ui/button";
 
 export function Pagination({
   page,
@@ -18,38 +19,65 @@ export function Pagination({
   const start = total === 0 ? 0 : (page - 1) * pageSize + 1;
   const end = Math.min(total, page * pageSize);
 
+  if (total === 0) return null;
+
   return (
-    <div className="pagination">
-      <span className="pagination__summary">
+    <div className="flex flex-col gap-2 text-xs text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
+      <span>
         共 {total} 条 · 第 {start}-{end} 条 · {totalPages} 页
       </span>
-      <div className="pagination__controls">
-        <button className="page-btn" disabled={page <= 1} onClick={() => onPageChange(page - 1)} aria-label="上一页">
+      <div className="flex items-center gap-1">
+        <Button
+          variant="ghost"
+          size="icon"
+          className="size-9 sm:size-8"
+          disabled={page <= 1}
+          onClick={() => onPageChange(page - 1)}
+          aria-label="上一页"
+        >
           <ChevronLeft size={16} />
-        </button>
+        </Button>
         {pages.map((p, i) =>
           p === "…" ? (
-            <span key={`e-${i}`} style={{ padding: "0 4px", color: "var(--muted)" }}>…</span>
+            <span key={`e-${i}`} className="px-1 text-muted-foreground">
+              …
+            </span>
           ) : (
-            <button key={p} className={`page-btn ${p === page ? "active" : ""}`} onClick={() => onPageChange(p as number)}>
+            <Button
+              key={p}
+              variant={p === page ? "default" : "ghost"}
+              size="sm"
+              className="h-9 min-w-9 px-2.5 tabular-nums sm:h-8 sm:min-w-8 sm:px-2"
+              aria-current={p === page ? "page" : undefined}
+              onClick={() => onPageChange(p as number)}
+            >
               {p}
-            </button>
+            </Button>
           ),
         )}
-        <button className="page-btn" disabled={page >= totalPages} onClick={() => onPageChange(page + 1)} aria-label="下一页">
+        <Button
+          variant="ghost"
+          size="icon"
+          className="size-9 sm:size-8"
+          disabled={page >= totalPages}
+          onClick={() => onPageChange(page + 1)}
+          aria-label="下一页"
+        >
           <ChevronRight size={16} />
-        </button>
+        </Button>
       </div>
     </div>
   );
 }
 
 function windowedPages(current: number, total: number): Array<number | "…"> {
-  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
+  if (total <= 5) return Array.from({ length: total }, (_, i) => i + 1);
   const out: Array<number | "…"> = [1];
-  if (current > 3) out.push("…");
-  for (let p = Math.max(2, current - 1); p <= Math.min(total - 1, current + 1); p += 1) out.push(p);
-  if (current < total - 2) out.push("…");
+  const start = Math.max(2, current - 1);
+  const end = Math.min(total - 1, current + 1);
+  if (start > 2) out.push("…");
+  for (let p = start; p <= end; p += 1) out.push(p);
+  if (end < total - 1) out.push("…");
   out.push(total);
   return out;
 }

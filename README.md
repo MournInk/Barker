@@ -4,7 +4,7 @@
 
 > 运行时生成访问密码 · 墙钟 cron（`Asia/Shanghai`）· 每条到点提醒落库为 delivery · 失败指数退避无限重试绝不丢弃 · SQLite WAL 持久化
 
-Author: **MournInk** · Version: **0.3.2** · Node `>=24` · pnpm `>=12`（唯一包管理器）
+Author: **MournInk** · Version: **0.4.0** · Node `>=24` · pnpm `>=12`（唯一包管理器）
 
 ---
 
@@ -14,7 +14,7 @@ Author: **MournInk** · Version: **0.3.2** · Node `>=24` · pnpm `>=12`（唯�
 - **任务管理**：名称、解释（可空）、开始时间、周期预设（每天 / 每周 / 每月，按 `Asia/Shanghai` 墙钟生成 cron）或自定义五段 cron；结束条件二选一：重复次数或截止日期。
 - **可靠推送**：每个到点时刻写入 `deliveries`，`claim → sending (2 min 租约) → pending/sent` 状态机；失败按 `5s * 2^attempt` 指数退避（上限 1h）**无限重试**，服务重启自动续传，暂停 / 恢复 / 编辑会补排所有错过的 occurrence。
 - **Bark 自配置**：`endpoint / deviceKey / title / sound / group / icon`，`deviceKey` 留空保持不变，一键发送测试推送。
-- **多页面布局**：`/` 概览仪表盘 · `/tasks` 任务分页（8 条/页，状态与关键词筛选）· `/settings` 独立配置页；侧边栏导航 + 移动端抽屉，5s 轮询与服务端调度器保持一致。
+- **简约扁平界面**：Tailwind CSS 4 + shadcn/ui 组件层（zinc 中性色、1px 描边、无阴影 / 渐变）；顶部导航 + 居中内容区，`/` 概览 · `/tasks` 任务列表（8 条/页分页、状态与关键词筛选、弹窗式新建/编辑）· `/settings` 配置页；320px 起自适应，5s 轮询与服务端调度器保持一致。
 
 ---
 
@@ -41,19 +41,19 @@ docker logs -f barker   # 未设 BARKER_PASSWORD 时在此查看随机密码
 ### 方式 B：docker run
 
 ```bash
-docker build -t barker:0.3.2 .
+docker build -t barker:0.4.0 .
 
 # 命名卷
 docker run -d --name barker -p 3000:3000 \
   -v barker-data:/app/data \
-  barker:0.3.2
+  barker:0.4.0
 
 # 或绑定宿主机目录
 mkdir -p ./data
 docker run -d --name barker -p 3000:3000 \
   -v "$PWD/data:/app/data" \
   -e BARKER_PASSWORD=change-me \
-  barker:0.3.2
+  barker:0.4.0
 
 docker logs barker
 ```
@@ -62,7 +62,7 @@ docker logs barker
 
 `Dockerfile` 为三阶段构建：`deps → builder (pnpm run build) → runner`，`runner` 仅含 `.next/standalone` + `.next/static`，以 `nextjs` 非 root 用户运行，`HEALTHCHECK` 每 30s 探测 `GET /api/session`。
 
-镜像标签：正式版本由 CI 推送到 `ghcr.io/mournink/barker`（`0.3.2` / `0.3` / `latest`）；本地构建用 `docker build -t barker:0.3.2 .`。`deps` 阶段会把 `package.json`、`pnpm-lock.yaml`、`pnpm-workspace.yaml` 一起拷入，确保 `pnpm install --frozen-lockfile` 能按 `allowBuilds` 放行原生构建脚本。
+镜像标签：正式版本由 CI 推送到 `ghcr.io/mournink/barker`（`0.4.0` / `0.4` / `latest`）；本地构建用 `docker build -t barker:0.4.0 .`。`deps` 阶段会把 `package.json`、`pnpm-lock.yaml`、`pnpm-workspace.yaml` 一起拷入，确保 `pnpm install --frozen-lockfile` 能按 `allowBuilds` 放行原生构建脚本。
 
 ---
 
@@ -128,6 +128,7 @@ app/                # Next.js App Router
   settings/page.tsx # /settings 配置
   api/overview|session|settings|tasks
 components/         # nav / gate / pagination / task-card
+  ui/               # shadcn/ui 基础组件（button / card / dialog / select…）
 lib/
   db.ts             # SQLite + deliveries 状态机 + 事务补排
   auth.ts           # 密码 / HMAC 会话 / 限流
@@ -135,7 +136,10 @@ lib/
   scheduler.ts      # enqueue + claim/lease + 指数退避
   bark.ts           # Bark push 适配
   validation.ts     # zod 校验
+  utils.ts          # cn() 类名合并（clsx + tailwind-merge）
 tests/              # node:test 用例
+postcss.config.mjs  # Tailwind CSS 4 PostCSS 插件
+components.json     # shadcn/ui 配置
 Dockerfile
 docker-compose.yml
 pnpm-workspace.yaml # pnpm 12 工作区设置（allowBuilds）
@@ -155,7 +159,7 @@ CI 在推送 `v*` 版本标签时自动执行同一组校验，并构建多架�
 Docker 冒烟：
 
 ```bash
-docker run -d --name barker-smoke -p 3001:3000 barker:0.3.2
+docker run -d --name barker-smoke -p 3001:3000 barker:0.4.0
 curl -i http://localhost:3001/api/session  # 200 {"authenticated":false}
 docker rm -f barker-smoke
 ```
@@ -168,14 +172,14 @@ docker rm -f barker-smoke
 2. 提交后打标签并推送（标签即版本创建动作）：
 
 ```bash
-git tag -a v0.3.2 -m "0.3.2"
-git push origin v0.3.2
+git tag -a v0.4.0 -m "0.4.0"
+git push origin v0.4.0
 ```
 
 3. [`.github/workflows/release.yml`](.github/workflows/release.yml) 自动执行：
-   - 版本一致性守卫：标签 `v0.3.2` 必须等于 `package.json` 的 `version`，否则失败；
+   - 版本一致性守卫：标签 `v0.4.0` 必须等于 `package.json` 的 `version`，否则失败；
    - 校验：`pnpm install --frozen-lockfile` → `typecheck` → `lint` → `test` → `build`；
-   - 发布：构建 `linux/amd64` + `linux/arm64` 镜像并推送 `ghcr.io/mournink/barker`，标签为 `0.3.2` / `0.3` / `latest`（预发布版本不带 `latest`）。
+   - 发布：构建 `linux/amd64` + `linux/arm64` 镜像并推送 `ghcr.io/mournink/barker`，标签为 `0.4.0` / `0.4` / `latest`（预发布版本不带 `latest`）。
 
 `workflow_dispatch` 可手动触发同一套校验，但不会推送镜像；流水线需要 `packages: write` 权限（工作流已声明）。
 
@@ -193,6 +197,7 @@ git push origin v0.3.2
 
 ## 版本
 
+- `0.4.0` — 前端重构：迁移至 Tailwind CSS 4 + shadcn/ui（11 个基础组件：button / card / dialog / select / badge / alert 等），以顶部导航 + 居中内容区的简约扁平界面替换原深色侧边栏；概览统计合并为单卡片、任务列表改为单卡分节行 + 弹窗式表单、分页 / 空态 / 设置页视觉重做；修复移动端首屏密度、只读 Cron 可读性、320px 导航裁切、短屏弹窗滚动（底部按钮固定）等问题。
 - `0.3.2` — 工程化收尾：以 pnpm 为唯一包管理器（移除 npm 锁文件与未被引用的 tailwind/postcss 依赖，新增 `pnpm-workspace.yaml` 放行原生构建脚本）、`eslint-config-next` 升至 16 并改用原生 flat config、修复 React 19 新 lint 规则下的前端问题与设置页数据目录显示、限流记录有界化、新增 `v*` 标签触发的发布流水线（校验 + 多架构 GHCR 镜像）。
 - `0.3.1` — 迁移至 pnpm（`packageManager` + `pnpm-lock.yaml` + `Dockerfile` 启用 `corepack`），文档与脚本统一为 `pnpm`。
 - `0.3.0` — 多页面重构（`/` 概览 · `/tasks` 分页 · `/settings` 独立页）、侧边栏导航与移动端抽屉、设计系统与分页组件重塑，API 支持 `page/pageSize/status/q` 分页查询。

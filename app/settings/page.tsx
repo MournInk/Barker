@@ -1,9 +1,22 @@
 "use client";
 
-import { Check, Send, Shield } from "lucide-react";
+import { Check, Send } from "lucide-react";
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { Gate } from "@/components/gate";
 import { Shell } from "@/components/nav";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import type { BarkSettings } from "@/lib/types";
 import { api } from "@/lib/ui";
 
@@ -76,64 +89,157 @@ export default function SettingsPage() {
     finally { setBusy(false); }
   }
 
-  if (authed === null) return <div className="gate"><p className="muted">正在确认访问权限…</p></div>;
+  if (authed === null) {
+    return (
+      <div className="grid min-h-[60vh] place-items-center px-4">
+        <p className="text-sm text-muted-foreground">正在确认访问权限…</p>
+      </div>
+    );
+  }
   if (!authed) return <Gate onAuthed={() => void load()} />;
+
+  const sqlitePath = dataDir ? `${dataDir.replace(/\/+$/, "")}/barker.sqlite` : "—";
 
   return (
     <Shell>
-      <div className="page-head">
-        <div>
-          <p className="eyebrow">Settings</p>
-          <h1>设置</h1>
-          <p>配置自建 Bark API。Device Key 留空表示保持不变。</p>
+      <div className="space-y-6">
+        <div className="space-y-1.5">
+          <div className="flex flex-wrap items-center gap-2">
+            <h1 className="text-xl font-semibold tracking-tight">设置</h1>
+            <Badge variant={configured ? "success" : "secondary"}>
+              {configured ? "已配置" : "未配置"}
+            </Badge>
+          </div>
+          <p className="text-sm text-muted-foreground">配置自建 Bark API。Device Key 留空表示保持不变。</p>
         </div>
-        <span className="chip" style={{ background: configured ? "#e3f4ed" : "#fff0df", color: configured ? "#0a7a63" : "#a85a10", borderColor: configured ? "#cce9dd" : "#ffe0b8" }}>
-          {configured ? <><Check size={12} /> Device Key 已保存</> : "尚未配置 Device Key"}
-        </span>
-      </div>
 
-      {message && <p className="notice" style={{ marginBottom: 12 }}>{message}</p>}
-      {error && <p className="error" style={{ marginBottom: 12 }}>{error}</p>}
+        {message && (
+          <Alert>
+            <AlertDescription>{message}</AlertDescription>
+          </Alert>
+        )}
+        {error && (
+          <Alert variant="destructive">
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        )}
 
-      <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1.1fr) minmax(280px, 0.6fr)", gap: 16, alignItems: "start" }}>
-        <form className="card stack" onSubmit={save}>
-          <h2 style={{ fontSize: 15, display: "flex", gap: 8, alignItems: "center" }}><Shield size={16} /> Bark</h2>
-          <label>API 地址<input value={settings.endpoint} onChange={(e) => setSettings({ ...settings, endpoint: e.target.value })} required placeholder="https://api.day.app" /></label>
-          <label>
-            Device Key
-            <input type="password" value={settings.deviceKey} placeholder={configured ? "••••••••（留空保持不变）" : "粘贴 Bark Device Key"} onChange={(e) => setSettings({ ...settings, deviceKey: e.target.value })} />
-          </label>
-          <div className="split">
-            <label>默认标题<input value={settings.title} onChange={(e) => setSettings({ ...settings, title: e.target.value })} required /></label>
-            <label>提示音<input value={settings.sound} onChange={(e) => setSettings({ ...settings, sound: e.target.value })} placeholder="如：1107" /></label>
-          </div>
-          <div className="split">
-            <label>分组<input value={settings.group} onChange={(e) => setSettings({ ...settings, group: e.target.value })} placeholder="Barker" /></label>
-            <label>图标 URL<input value={settings.icon} onChange={(e) => setSettings({ ...settings, icon: e.target.value })} placeholder="https://…（可空）" /></label>
-          </div>
-          <div className="cluster">
-            <button className="button" disabled={busy}><Check size={16} /> 保存配置</button>
-            <button type="button" className="ghost" disabled={busy} onClick={() => void test()}><Send size={16} /> 发送测试</button>
-          </div>
-          <p className="helper">保存后可点“发送测试”验证推送链路是否通畅。</p>
-        </form>
+        <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
+          <form onSubmit={save}>
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">Bark</CardTitle>
+                <CardDescription>推送到自建 Bark API。Device Key 仅保存在服务端，不会回显。</CardDescription>
+              </CardHeader>
+              <CardContent className="grid gap-4">
+                <div className="grid gap-1.5">
+                  <Label htmlFor="endpoint">API 地址</Label>
+                  <Input
+                    id="endpoint"
+                    value={settings.endpoint}
+                    onChange={(e) => setSettings({ ...settings, endpoint: e.target.value })}
+                    required
+                    placeholder="https://api.day.app"
+                  />
+                </div>
+                <div className="grid gap-1.5">
+                  <Label htmlFor="deviceKey">Device Key</Label>
+                  <Input
+                    id="deviceKey"
+                    type="password"
+                    value={settings.deviceKey}
+                    placeholder={configured ? "••••••••（留空保持不变）" : "粘贴 Bark Device Key"}
+                    onChange={(e) => setSettings({ ...settings, deviceKey: e.target.value })}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    {configured ? "已保存 Device Key；留空提交则保持不变。" : "尚未保存 Device Key，保存后才能测试推送。"}
+                  </p>
+                </div>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div className="grid gap-1.5">
+                    <Label htmlFor="title">默认标题</Label>
+                    <Input
+                      id="title"
+                      value={settings.title}
+                      onChange={(e) => setSettings({ ...settings, title: e.target.value })}
+                      required
+                    />
+                  </div>
+                  <div className="grid gap-1.5">
+                    <Label htmlFor="sound">提示音</Label>
+                    <Input
+                      id="sound"
+                      value={settings.sound}
+                      onChange={(e) => setSettings({ ...settings, sound: e.target.value })}
+                      placeholder="如：1107"
+                    />
+                  </div>
+                </div>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div className="grid gap-1.5">
+                    <Label htmlFor="group">分组</Label>
+                    <Input
+                      id="group"
+                      value={settings.group}
+                      onChange={(e) => setSettings({ ...settings, group: e.target.value })}
+                      placeholder="Barker"
+                    />
+                  </div>
+                  <div className="grid gap-1.5">
+                    <Label htmlFor="icon">图标 URL</Label>
+                    <Input
+                      id="icon"
+                      value={settings.icon}
+                      onChange={(e) => setSettings({ ...settings, icon: e.target.value })}
+                      placeholder="https://…（可空）"
+                    />
+                  </div>
+                </div>
+              </CardContent>
+              <CardFooter className="flex-wrap justify-end gap-2">
+                <p className="mr-auto text-xs text-muted-foreground">保存后可点“发送测试”验证推送链路是否通畅。</p>
+                <Button type="button" variant="outline" disabled={busy} onClick={() => void test()}>
+                  <Send /> 发送测试
+                </Button>
+                <Button type="submit" disabled={busy}>
+                  <Check /> 保存配置
+                </Button>
+              </CardFooter>
+            </Card>
+          </form>
 
-        <div className="stack">
-          <div className="card" style={{ padding: 16 }}>
-            <p className="eyebrow">安全</p>
-            <h3 style={{ fontSize: 14, marginTop: 6 }}>代理与会话</h3>
-            <p className="muted" style={{ fontSize: 12, lineHeight: 1.6, marginTop: 8 }}>
-              直连公网时不要启用 <code>BARKER_TRUST_PROXY</code>，否则客户端可伪造 <code>X-Forwarded-*</code> 绕过限流。
-              会话为 <code>HttpOnly + SameSite=Lax</code>，有效期 12 小时。
-            </p>
-          </div>
-          <div className="card" style={{ padding: 16 }}>
-            <p className="eyebrow">数据</p>
-            <h3 style={{ fontSize: 14, marginTop: 6 }}>持久化</h3>
-            <p className="muted" style={{ fontSize: 12, lineHeight: 1.6, marginTop: 8 }}>
-              任务与推送队列持久化于 <code>{dataDir ? `${dataDir.replace(/\/+$/, "")}/barker.sqlite` : "—"}</code>（WAL）。
-              备份时一并拷贝 <code>.sqlite-wal/.sqlite-shm</code>。
-            </p>
+          <div className="space-y-4">
+            <Card>
+              <CardHeader>
+                <CardTitle>安全</CardTitle>
+                <CardDescription>代理与会话</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-2 text-sm leading-6 text-muted-foreground">
+                <p>
+                  直连公网时不要启用 <code className="font-mono text-foreground">BARKER_TRUST_PROXY</code>
+                  ，否则客户端可伪造 <code className="font-mono text-foreground">X-Forwarded-*</code> 绕过限流。
+                </p>
+                <p>
+                  会话为 <code className="font-mono text-foreground">HttpOnly + SameSite=Lax</code>，有效期 12 小时。
+                </p>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>数据</CardTitle>
+                <CardDescription>持久化</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-2 text-sm leading-6 text-muted-foreground">
+                <p>任务与推送队列持久化于（WAL）：</p>
+                <code className="block break-all rounded-md bg-muted px-2 py-1.5 font-mono text-[11px] leading-5 text-foreground/80">
+                  {sqlitePath}
+                </code>
+                <p>
+                  备份时一并拷贝 <code className="font-mono text-foreground">.sqlite-wal/.sqlite-shm</code>。
+                </p>
+              </CardContent>
+            </Card>
           </div>
         </div>
       </div>

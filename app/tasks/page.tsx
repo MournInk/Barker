@@ -1,14 +1,29 @@
 "use client";
 
-import { Clock3, Plus, RefreshCw, Search } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { Plus, RefreshCw, Search } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import { Gate } from "@/components/gate";
 import { Shell } from "@/components/nav";
 import { Pagination } from "@/components/pagination";
 import { TaskCard } from "@/components/task-card";
+import { Alert } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
 import { presetCron } from "@/lib/cron";
 import type { RecurrencePreset, Task, TaskStatus } from "@/lib/types";
-import { api, formatTime, localDateValue, localInputValue, toOffsetDateTime } from "@/lib/ui";
+import { api, localDateValue, localInputValue, toOffsetDateTime } from "@/lib/ui";
 
 type LimitMode = "count" | "date";
 const PRESETS: Array<{ value: RecurrencePreset; label: string }> = [
@@ -31,6 +46,7 @@ export default function TasksPage() {
   const [qInput, setQInput] = useState("");
   const [status, setStatus] = useState<"" | TaskStatus>("");
   const [editing, setEditing] = useState<Task | null>(null);
+  const [dialogOpen, setDialogOpen] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -41,7 +57,6 @@ export default function TasksPage() {
   const [repeatCount, setRepeatCount] = useState("30");
   // Filled with the default (tomorrow in Asia/Shanghai) when 截止日期 mode is picked, so no impure date is computed during render.
   const [endDate, setEndDate] = useState("");
-  const formRef = useRef<HTMLFormElement>(null);
 
   const generatedCron = useMemo(() => {
     if (preset === "custom") return cron;
@@ -86,15 +101,43 @@ export default function TasksPage() {
     return () => { alive = false; clearInterval(timer); };
   }, [apply, authed, fetchCurrent]);
 
+  function resetForm() {
+    setPreset("daily");
+    setStartsAt(localInputValue());
+    setCron("0 9 * * *");
+    setLimitMode("count");
+    setRepeatCount("30");
+    setEndDate("");
+  }
+
+  function startCreate() {
+    setEditing(null);
+    setError("");
+    resetForm();
+    setDialogOpen(true);
+  }
+
   function beginEdit(task: Task) {
     setEditing(task);
+    setError("");
     setPreset(task.preset);
     setStartsAt(localInputValue(new Date(task.startsAt)));
     setCron(task.cron);
     setLimitMode(task.repeatCount ? "count" : "date");
     setRepeatCount(String(task.repeatCount ?? 30));
     setEndDate(task.endDate ?? localDateValue());
-    formRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    setDialogOpen(true);
+  }
+
+  function closeDialog() {
+    setDialogOpen(false);
+    setEditing(null);
+    resetForm();
+  }
+
+  function applySearch() {
+    setQ(qInput);
+    setPage(1);
   }
 
   async function saveTask(e: FormEvent<HTMLFormElement>) {
@@ -110,18 +153,16 @@ export default function TasksPage() {
       repeatCount: limitMode === "count" ? Number(repeatCount) : null,
       endDate: limitMode === "date" ? endDate : null,
     };
+    const wasEditing = editing !== null;
     setBusy(true); setError(""); setMessage("");
     try {
       await api(editing ? `/api/tasks/${editing.id}` : "/api/tasks", { method: editing ? "PUT" : "POST", body: JSON.stringify(payload) });
       setEditing(null);
       formEl.reset();
       // restore controlled defaults after reset
-      setPreset("daily");
-      setStartsAt(localInputValue());
-      setCron("0 9 * * *");
-      setLimitMode("count");
-      setRepeatCount("30");
-      setMessage(editing ? "任务已更新" : "任务已创建");
+      resetForm();
+      setMessage(wasEditing ? "任务已更新" : "任务已创建");
+      setDialogOpen(false);
       setPage(1);
       await load();
     } catch (err) {
@@ -143,97 +184,239 @@ export default function TasksPage() {
     catch (err) { setError(err instanceof Error ? err.message : "删除失败"); }
   }
 
-  if (authed === null) return <div className="gate"><p className="muted">正在确认访问权限…</p></div>;
+  if (authed === null) {
+    return (
+      <div className="grid min-h-[60vh] place-items-center px-4">
+        <p className="text-sm text-muted-foreground">正在确认访问权限…</p>
+      </div>
+    );
+  }
   if (!authed) return <Gate onAuthed={() => void load()} />;
 
   return (
     <Shell>
-      <div className="page-head">
-        <div>
-          <p className="eyebrow">Tasks</p>
-          <h1>任务</h1>
-          <p>每页 {PAGE_SIZE} 条，支持按状态与关键词筛选。下次时间按 Asia/Shanghai 显示。</p>
-        </div>
-        <div className="cluster">
-          <button className="ghost icon-button" aria-label="刷新" title="刷新" onClick={() => void load()}><RefreshCw size={16} /></button>
-        </div>
-      </div>
-
-      {message && <p className="notice" style={{ marginBottom: 12 }}>{message}</p>}
-      {error && <p className="error" style={{ marginBottom: 12 }}>{error}</p>}
-
-      <div className="grid">
-        <section className="stack">
-          <form ref={formRef} className="card stack" onSubmit={saveTask}>
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <span style={{ width: 32, height: 32, display: "grid", placeItems: "center", borderRadius: 10, background: "var(--accent-soft)", color: "var(--accent)", border: "1px solid #cfe9dd" }}>
-                <Clock3 size={16} />
-              </span>
-              <h2 style={{ fontSize: 15 }}>{editing ? "编辑任务" : "新建任务"}</h2>
-              {editing && <span className="badge completed" style={{ marginLeft: "auto" }}>{formatTime(editing.nextRunAt)}</span>}
-            </div>
-
-            <label>名称<input name="name" required maxLength={80} defaultValue={editing?.name ?? ""} key={editing?.id ?? "new"} placeholder="如：喝水 / 站立提醒" /></label>
-            <label>解释<textarea name="description" maxLength={500} defaultValue={editing?.description ?? ""} key={`${editing?.id ?? "new"}-desc`} placeholder="推送正文，可空" /></label>
-            <label>开始时间<input type="datetime-local" required value={startsAt} onChange={(e) => setStartsAt(e.target.value)} /></label>
-
-            <div className="choice" role="group" aria-label="周期预设">
-              {PRESETS.map((item) => (
-                <button key={item.value} type="button" className={preset === item.value ? "selected" : ""} aria-pressed={preset === item.value} onClick={() => setPreset(item.value)}>
-                  {item.label}
-                </button>
-              ))}
-            </div>
-            <label>
-              Cron
-              {preset === "custom" ? <input value={cron} onChange={(e) => setCron(e.target.value)} required placeholder="如：0 9 * * *" /> : <input value={generatedCron} readOnly />}
-            </label>
-
-            <div className="choice" role="group" aria-label="结束条件">
-              <button type="button" className={limitMode === "count" ? "selected" : ""} aria-pressed={limitMode === "count"} onClick={() => setLimitMode("count")}>重复次数</button>
-              <button type="button" className={limitMode === "date" ? "selected" : ""} aria-pressed={limitMode === "date"} onClick={() => { setLimitMode("date"); setEndDate((cur) => cur || localDateValue(new Date(Date.now() + 86_400_000))); }}>截止日期</button>
-            </div>
-            {limitMode === "count" ? (
-              <label>次数<input type="number" min={1} value={repeatCount} onChange={(e) => setRepeatCount(e.target.value)} required /></label>
-            ) : (
-              <label>截止日期<input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} required /></label>
-            )}
-
-            <div className="cluster">
-              <button className="button" disabled={busy}><Plus size={16} />{editing ? "保存修改" : "添加任务"}</button>
-              {editing && <button type="button" className="ghost" onClick={() => setEditing(null)}>取消编辑</button>}
-            </div>
-            <p className="helper">预设按开始时间的墙钟时分生成 cron；自定义请输入标准五段格式。</p>
-          </form>
-        </section>
-
-        <section style={{ minWidth: 0, display: "grid", gap: 12 }}>
-          <div className="toolbar">
-            <div className="toolbar__grow" style={{ display: "flex", gap: 8 }}>
-              <input placeholder="搜索名称 / 解释" value={qInput} onChange={(e) => setQInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); setQ(qInput); setPage(1); } }} />
-              <button className="ghost" onClick={() => { setQ(qInput); setPage(1); }}><Search size={16} /></button>
-            </div>
-            <select value={status} onChange={(e) => { setStatus(e.target.value as never); setPage(1); }} style={{ minWidth: 140 }}>
-              <option value="">全部状态</option>
-              <option value="active">运行中</option>
-              <option value="paused">已暂停</option>
-              <option value="completed">已完成</option>
-            </select>
-            <span className="chip" style={{ background: "#0a7a6312", color: "#0a7a63", borderColor: "#0a7a6320" }}>共 {total} 条</span>
+      <div className="space-y-6">
+        <div className="flex flex-wrap items-end justify-between gap-4">
+          <div className="space-y-1.5">
+            <h1 className="text-xl font-semibold tracking-tight">任务</h1>
+            <p className="text-sm text-muted-foreground">
+              每页 {PAGE_SIZE} 条 · 按状态与关键词筛选 · Asia/Shanghai
+            </p>
           </div>
+          <div className="flex items-center gap-2">
+            <Button variant="ghost" size="icon" aria-label="刷新" title="刷新" onClick={() => void load()}>
+              <RefreshCw />
+            </Button>
+            <Button onClick={startCreate}>
+              <Plus />
+              新建任务
+            </Button>
+          </div>
+        </div>
 
-          {!tasks.length ? (
-            <div className="empty">没有匹配的任务。试试调整筛选或新建一个。</div>
-          ) : (
-            <div className="tasks">
-              {tasks.map((t) => (
-                <TaskCard key={t.id} task={t} onEdit={beginEdit} onToggle={toggleStatus} onDelete={removeTask} />
-              ))}
+        {message && <Alert className="px-3 py-2">{message}</Alert>}
+        {error && !dialogOpen && (
+          <Alert variant="destructive" className="px-3 py-2">
+            {error}
+          </Alert>
+        )}
+
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-center gap-2">
+            <Input
+              placeholder="搜索名称 / 解释"
+              value={qInput}
+              onChange={(e) => setQInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  applySearch();
+                }
+              }}
+              className="w-full sm:w-64"
+            />
+            <Button variant="outline" type="button" onClick={applySearch}>
+              <Search />
+              搜索
+            </Button>
+          </div>
+          <div className="flex items-center gap-3">
+            <Select
+              value={status || "all"}
+              onValueChange={(value) => {
+                setStatus(value === "all" ? "" : (value as TaskStatus));
+                setPage(1);
+              }}
+            >
+              <SelectTrigger className="w-[140px]" aria-label="状态筛选">
+                <SelectValue placeholder="全部状态" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">全部状态</SelectItem>
+                <SelectItem value="active">运行中</SelectItem>
+                <SelectItem value="paused">已暂停</SelectItem>
+                <SelectItem value="completed">已完成</SelectItem>
+              </SelectContent>
+            </Select>
+            <span className="text-xs text-muted-foreground">共 {total} 条</span>
+          </div>
+        </div>
+
+        {tasks.length > 0 ? (
+          <Card className="divide-y divide-border overflow-hidden">
+            {tasks.map((t) => (
+              <TaskCard key={t.id} task={t} onEdit={beginEdit} onToggle={toggleStatus} onDelete={removeTask} />
+            ))}
+          </Card>
+        ) : (
+          <Card className="flex flex-col items-center gap-3 px-5 py-10 text-center">
+            <p className="text-sm text-muted-foreground">没有匹配的任务。试试调整筛选或新建一个。</p>
+            <Button type="button" onClick={startCreate}>
+              <Plus /> 新建任务
+            </Button>
+          </Card>
+        )}
+
+        <Pagination page={page} pageSize={PAGE_SIZE} total={total} onPageChange={setPage} />
+
+        <Dialog
+          open={dialogOpen}
+          onOpenChange={(next) => {
+            if (next) setDialogOpen(true);
+            else closeDialog();
+          }}
+        >
+          <DialogContent>
+            <div className="space-y-4">
+            <DialogHeader>
+              <DialogTitle>{editing ? "编辑任务" : "新建任务"}</DialogTitle>
+              <DialogDescription>预设按开始时间的墙钟时分生成 cron；自定义请输入标准五段格式。</DialogDescription>
+            </DialogHeader>
+            <form onSubmit={saveTask} className="grid gap-4">
+              {error && (
+                <Alert variant="destructive" className="px-3 py-2">
+                  {error}
+                </Alert>
+              )}
+              <div className="grid gap-2">
+                <Label htmlFor="task-name">名称</Label>
+                <Input
+                  id="task-name"
+                  name="name"
+                  required
+                  maxLength={80}
+                  defaultValue={editing?.name ?? ""}
+                  key={editing?.id ?? "new"}
+                  placeholder="如：喝水 / 站立提醒"
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="task-description">解释</Label>
+                <Textarea
+                  id="task-description"
+                  name="description"
+                  maxLength={500}
+                  rows={3}
+                  defaultValue={editing?.description ?? ""}
+                  key={`${editing?.id ?? "new"}-desc`}
+                  placeholder="推送正文，可空"
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="task-starts-at">开始时间</Label>
+                <Input
+                  id="task-starts-at"
+                  type="datetime-local"
+                  required
+                  value={startsAt}
+                  onChange={(e) => setStartsAt(e.target.value)}
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label>周期</Label>
+                <Select value={preset} onValueChange={(value) => setPreset(value as RecurrencePreset)}>
+                  <SelectTrigger aria-label="周期预设">
+                    <SelectValue placeholder="每天" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {PRESETS.map((item) => (
+                      <SelectItem key={item.value} value={item.value}>
+                        {item.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="task-cron">Cron</Label>
+                <Input
+                  id="task-cron"
+                  className={preset === "custom" ? "font-mono" : "cursor-default bg-muted/50 font-mono text-muted-foreground"}
+                  value={preset === "custom" ? cron : generatedCron}
+                  readOnly={preset !== "custom"}
+                  required={preset === "custom"}
+                  onChange={(e) => setCron(e.target.value)}
+                  placeholder="如：0 9 * * *"
+                />
+                {preset !== "custom" && (
+                  <p className="text-xs text-muted-foreground">由「开始时间」与周期自动生成；选择“自定义”可手动编辑。</p>
+                )}
+              </div>
+              <div className="grid gap-2">
+                <Label>结束条件</Label>
+                <Select
+                  value={limitMode}
+                  onValueChange={(value) => {
+                    const mode = value as LimitMode;
+                    setLimitMode(mode);
+                    if (mode === "date") setEndDate((cur) => cur || localDateValue(new Date(Date.now() + 86_400_000)));
+                  }}
+                >
+                  <SelectTrigger aria-label="结束条件">
+                    <SelectValue placeholder="重复次数" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="count">重复次数</SelectItem>
+                    <SelectItem value="date">截止日期</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              {limitMode === "count" ? (
+                <div className="grid gap-2">
+                  <Label htmlFor="task-repeat-count">次数</Label>
+                  <Input
+                    id="task-repeat-count"
+                    type="number"
+                    min={1}
+                    required
+                    value={repeatCount}
+                    onChange={(e) => setRepeatCount(e.target.value)}
+                  />
+                </div>
+              ) : (
+                <div className="grid gap-2">
+                  <Label htmlFor="task-end-date">截止日期</Label>
+                  <Input
+                    id="task-end-date"
+                    type="date"
+                    required
+                    value={endDate}
+                    onChange={(e) => setEndDate(e.target.value)}
+                  />
+                </div>
+              )}
+              <DialogFooter className="sticky -bottom-6 -mx-6 -mb-6 mt-2 border-t bg-background px-6 py-3">
+                <Button type="button" variant="outline" onClick={closeDialog}>
+                  取消
+                </Button>
+                <Button type="submit" disabled={busy}>
+                  保存
+                </Button>
+              </DialogFooter>
+            </form>
             </div>
-          )}
-
-          <Pagination page={page} pageSize={PAGE_SIZE} total={total} onPageChange={setPage} />
-        </section>
+          </DialogContent>
+        </Dialog>
       </div>
     </Shell>
   );
