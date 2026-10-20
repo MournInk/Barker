@@ -4,7 +4,7 @@
 
 > 运行时生成访问密码 · 墙钟 cron（`Asia/Shanghai`）· 每条到点提醒落库为 delivery · 失败指数退避无限重试绝不丢弃 · SQLite WAL 持久化
 
-Author: **MournInk** · Version: **0.2.0** · Node `>=24`
+Author: **MournInk** · Version: **0.3.0** · Node `>=24`
 
 ---
 
@@ -14,7 +14,7 @@ Author: **MournInk** · Version: **0.2.0** · Node `>=24`
 - **任务管理**：名称、解释（可空）、开始时间、周期预设（每天 / 每周 / 每月，按 `Asia/Shanghai` 墙钟生成 cron）或自定义五段 cron；结束条件二选一：重复次数或截止日期。
 - **可靠推送**：每个到点时刻写入 `deliveries`，`claim → sending (2 min 租约) → pending/sent` 状态机；失败按 `5s * 2^attempt` 指数退避（上限 1h）**无限重试**，服务重启自动续传，暂停 / 恢复 / 编辑会补排所有错过的 occurrence。
 - **Bark 自配置**：`endpoint / deviceKey / title / sound / group / icon`，`deviceKey` 留空保持不变，一键发送测试推送。
-- **前端一体**：`app/page.tsx` 单页完成登录、任务增删改、暂停/恢复、状态与重试队列展示，5s 轮询与服务端调度器保持一致。
+- **多页面布局**：`/` 概览仪表盘 · `/tasks` 任务分页（8 条/页，状态与关键词筛选）· `/settings` 独立配置页；侧边栏导航 + 移动端抽屉，5s 轮询与服务端调度器保持一致。
 
 ---
 
@@ -41,19 +41,19 @@ docker logs -f barker   # 未设 BARKER_PASSWORD 时在此查看随机密码
 ### 方式 B：docker run
 
 ```bash
-docker build -t barker:0.2.0 .
+docker build -t barker:0.3.0 .
 
 # 命名卷
 docker run -d --name barker -p 3000:3000 \
   -v barker-data:/app/data \
-  barker:0.2.0
+  barker:0.3.0
 
 # 或绑定宿主机目录
 mkdir -p ./data
 docker run -d --name barker -p 3000:3000 \
   -v "$PWD/data:/app/data" \
   -e BARKER_PASSWORD=change-me \
-  barker:0.2.0
+  barker:0.3.0
 
 docker logs barker
 ```
@@ -62,7 +62,7 @@ docker logs barker
 
 `Dockerfile` 为三阶段构建：`deps → builder (npm run build) → runner`，`runner` 仅含 `.next/standalone` + `.next/static`，以 `nextjs` 非 root 用户运行，`HEALTHCHECK` 每 30s 探测 `GET /api/session`。
 
-镜像标签：`barker:0.2.0` / `ghcr.io/mournink/barker:0.2.0`
+镜像标签：`barker:0.3.0` / `ghcr.io/mournink/barker:0.3.0`
 
 ---
 
@@ -118,8 +118,12 @@ Set BARKER_PASSWORD to use your own password.
 ## 项目结构
 
 ```
-app/                # Next.js App Router 页面与 API
+app/                # Next.js App Router
+  page.tsx          # / 概览仪表盘
+  tasks/page.tsx    # /tasks 分页
+  settings/page.tsx # /settings 配置
   api/overview|session|settings|tasks
+components/         # nav / gate / pagination / task-card
 lib/
   db.ts             # SQLite + deliveries 状态机 + 事务补排
   auth.ts           # 密码 / HMAC 会话 / 限流
@@ -143,7 +147,7 @@ npm run test && npm run typecheck && npm run lint && npm run build
 Docker 冒烟：
 
 ```bash
-docker run -d --name barker-smoke -p 3001:3000 barker:0.2.0
+docker run -d --name barker-smoke -p 3001:3000 barker:0.3.0
 curl -i http://localhost:3001/api/session  # 200 {"authenticated":false}
 docker rm -f barker-smoke
 ```
@@ -162,6 +166,7 @@ docker rm -f barker-smoke
 
 ## 版本
 
+- `0.3.0` — 多页面重构（`/` 概览 · `/tasks` 分页 · `/settings` 独立页）、侧边栏导航与移动端抽屉、设计系统与分页组件重塑，API 支持 `page/pageSize/status/q` 分页查询。
 - `0.2.0` — Docker 化（standalone 镜像 + compose + healthcheck）、文档重写、依赖升级至 Next 16 / React 19.3 / zod 4.6 等，修复暂停/编辑时的到期提醒丢弃与 `deviceKey` 校验问题。
 - `0.1.0` — 首个可用版本。
 

@@ -3,8 +3,8 @@ import type { ReactNode } from "react";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Barker",
-  description: "按周期把提醒推送到 Bark",
+  title: "Barker · 可靠的 Bark 定时推送",
+  description: "按 cron 周期将提醒可靠推送到自建 Bark API — 指数退避无限重试，绝不丢弃。",
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {

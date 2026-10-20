@@ -94,6 +94,32 @@ export function listTasks(): Task[] {
   return (db.prepare("SELECT * FROM tasks ORDER BY created_at DESC").all() as TaskRow[]).map(taskFromRow);
 }
 
+export function listTasksPaginated(options: {
+  page: number;
+  pageSize: number;
+  status?: Task["status"];
+  q?: string;
+}): { tasks: Task[]; total: number } {
+  const page = Math.max(1, Math.floor(options.page));
+  const pageSize = Math.min(50, Math.max(1, Math.floor(options.pageSize)));
+  const offset = (page - 1) * pageSize;
+  const conditions: string[] = [];
+  const params: unknown[] = [];
+  if (options.status) {
+    conditions.push("status = ?");
+    params.push(options.status);
+  }
+  if (options.q?.trim()) {
+    conditions.push("(name LIKE ? OR description LIKE ?)");
+    const like = `%${options.q.trim()}%`;
+    params.push(like, like);
+  }
+  const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+  const totalRow = db.prepare(`SELECT COUNT(*) as count FROM tasks ${where}`).get(...(params as never[])) as { count: number };
+  const rows = db.prepare(`SELECT * FROM tasks ${where} ORDER BY created_at DESC LIMIT ? OFFSET ?`).all(...(params as never[]), pageSize, offset) as TaskRow[];
+  return { tasks: rows.map(taskFromRow), total: totalRow.count };
+}
+
 export function getTask(id: string): Task | null {
   const row = db.prepare("SELECT * FROM tasks WHERE id = ?").get(id) as TaskRow | undefined;
   return row ? taskFromRow(row) : null;
