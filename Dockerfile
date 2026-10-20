@@ -7,8 +7,9 @@ FROM node:24-alpine AS base
 # --- deps: install all dependencies (including dev) for the build ---
 FROM base AS deps
 WORKDIR /app
-COPY package.json package-lock.json ./
-RUN npm ci
+RUN corepack enable
+COPY package.json pnpm-lock.yaml ./
+RUN pnpm install --frozen-lockfile
 
 # --- builder: compile Next.js standalone output ---
 FROM base AS builder
@@ -17,7 +18,7 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 ENV NEXT_TELEMETRY_DISABLED=1
 # Ensure `public` exists so the runner stage COPY never fails when no static assets are present
-RUN mkdir -p public && npm run build
+RUN mkdir -p public && pnpm run build
 
 # --- runner: minimal production runtime ---
 FROM base AS runner

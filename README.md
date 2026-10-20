@@ -4,7 +4,7 @@
 
 > 运行时生成访问密码 · 墙钟 cron（`Asia/Shanghai`）· 每条到点提醒落库为 delivery · 失败指数退避无限重试绝不丢弃 · SQLite WAL 持久化
 
-Author: **MournInk** · Version: **0.3.0** · Node `>=24`
+Author: **MournInk** · Version: **0.3.1** · Node `>=24` · pnpm `>=9`
 
 ---
 
@@ -41,28 +41,28 @@ docker logs -f barker   # 未设 BARKER_PASSWORD 时在此查看随机密码
 ### 方式 B：docker run
 
 ```bash
-docker build -t barker:0.3.0 .
+docker build -t barker:0.3.1 .
 
 # 命名卷
 docker run -d --name barker -p 3000:3000 \
   -v barker-data:/app/data \
-  barker:0.3.0
+  barker:0.3.1
 
 # 或绑定宿主机目录
 mkdir -p ./data
 docker run -d --name barker -p 3000:3000 \
   -v "$PWD/data:/app/data" \
   -e BARKER_PASSWORD=change-me \
-  barker:0.3.0
+  barker:0.3.1
 
 docker logs barker
 ```
 
 ### 从源码构建镜像说明
 
-`Dockerfile` 为三阶段构建：`deps → builder (npm run build) → runner`，`runner` 仅含 `.next/standalone` + `.next/static`，以 `nextjs` 非 root 用户运行，`HEALTHCHECK` 每 30s 探测 `GET /api/session`。
+`Dockerfile` 为三阶段构建：`deps → builder (pnpm run build) → runner`，`runner` 仅含 `.next/standalone` + `.next/static`，以 `nextjs` 非 root 用户运行，`HEALTHCHECK` 每 30s 探测 `GET /api/session`。
 
-镜像标签：`barker:0.3.0` / `ghcr.io/mournink/barker:0.3.0`
+镜像标签：`barker:0.3.1` / `ghcr.io/mournink/barker:0.3.1`
 
 ---
 
@@ -96,14 +96,14 @@ docker logs barker
 
 ```bash
 node -v  # >=24
-npm install
+pnpm install           # 或 corepack enable && pnpm install
 
-npm run dev              # http://localhost:3000
-npm run build && npm start
+pnpm dev               # http://localhost:3000
+pnpm build && pnpm start
 
-npm run test             # node:test 单元测试（22 用例）
-npm run typecheck        # tsc --noEmit
-npm run lint             # eslint
+pnpm test              # node:test 单元测试（22 用例）
+pnpm typecheck         # tsc --noEmit
+pnpm lint              # eslint
 ```
 
 启动日志：
@@ -141,13 +141,13 @@ docker-compose.yml
 ## 校验
 
 ```bash
-npm run test && npm run typecheck && npm run lint && npm run build
+pnpm test && pnpm typecheck && pnpm lint && pnpm build
 ```
 
 Docker 冒烟：
 
 ```bash
-docker run -d --name barker-smoke -p 3001:3000 barker:0.3.0
+docker run -d --name barker-smoke -p 3001:3000 barker:0.3.1
 curl -i http://localhost:3001/api/session  # 200 {"authenticated":false}
 docker rm -f barker-smoke
 ```
@@ -166,6 +166,7 @@ docker rm -f barker-smoke
 
 ## 版本
 
+- `0.3.1` — 迁移至 pnpm（`packageManager` + `pnpm-lock.yaml` + `Dockerfile` 启用 `corepack`），文档与脚本统一为 `pnpm`。
 - `0.3.0` — 多页面重构（`/` 概览 · `/tasks` 分页 · `/settings` 独立页）、侧边栏导航与移动端抽屉、设计系统与分页组件重塑，API 支持 `page/pageSize/status/q` 分页查询。
 - `0.2.0` — Docker 化（standalone 镜像 + compose + healthcheck）、文档重写、依赖升级至 Next 16 / React 19.3 / zod 4.6 等，修复暂停/编辑时的到期提醒丢弃与 `deviceKey` 校验问题。
 - `0.1.0` — 首个可用版本。

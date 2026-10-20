@@ -1,6 +1,6 @@
 {
   "name": "barker",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "前后端一体的 Next.js 定时提醒小工具，按 cron 周期将提醒可靠推送到自建 Bark API。",
   "author": "MournInk",
   "private": true,
@@ -33,5 +33,6 @@
     "eslint-config-next": "^15.5.28",
     "tsx": "^4.23.15",
     "typescript": "^5.9.3"
-  }
+  },
+  "packageManager": "pnpm@12.14.0"
 }
