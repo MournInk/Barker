@@ -17,7 +17,6 @@ on:
 # is read-only. `secrets.GITHUB_TOKEN` inherits these scopes.
 permissions:
   contents: read
-  packages: write
 
 # Never cancel an in-flight release: a cancelled `verify` could leave a
 # half-pushed image manifest list behind.
@@ -32,19 +31,20 @@ jobs:
   verify:
     name: verify
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       # No `version:` on purpose: pnpm/action-setup@v4 reads `packageManager`
       # from package.json, so CI installs exactly the pinned pnpm 12.14.0.
       - name: Set up pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: "24"
+          node-version: "24.22.2"
           cache: pnpm
 
       # The tag is the source of truth for the release version, so it must match
@@ -83,10 +83,11 @@ jobs:
         run: pnpm lint
 
       - name: Test
+        if: github.event_name == 'push' && github.ref_type == 'tag' && github.event.created
         run: pnpm test
 
       - name: Build
-        run: pnpm build
+        run: BARKER_DATA_DIR="$(mktemp -d)" BARKER_DISABLE_SCHEDULER=1 pnpm build
 
   image:
     name: image
@@ -95,18 +96,22 @@ jobs:
     # after verification. Re-running a failed run replays the same tag ref.
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
 
       - name: Set up Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -119,7 +124,7 @@ jobs:
       # backwards; only the newest tag is normally pushed in this repo.
       - name: Extract image metadata
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
         with:
           images: ghcr.io/${{ github.repository }}
           flavor: |
@@ -130,7 +135,7 @@ jobs:
             type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
 
       - name: Build and push multi-arch image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           file: ./Dockerfile
