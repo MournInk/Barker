@@ -59,6 +59,10 @@ jobs:
             exit 0
           fi
           tag_version="${GITHUB_REF_NAME#v}"
+          if [[ ! "$tag_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]]; then
+            echo "::error::Expected a SemVer tag such as v1.2.3 or v1.2.3-rc.1."
+            exit 1
+          fi
           pkg_version="$(node -p "require('./package.json').version")"
           echo "tag version         : ${tag_version}"
           echo "package.json version: ${pkg_version}"
@@ -94,7 +98,7 @@ jobs:
     needs: verify
     # Only tag pushes publish: branch pushes and plain manual dispatches stop
     # after verification. Re-running a failed run replays the same tag ref.
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push' && github.ref_type == 'tag' && github.event.created && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
