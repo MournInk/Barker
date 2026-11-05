@@ -2,6 +2,10 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   output: "standalone",
+  // Runtime volumes and local credentials must never become standalone assets.
+  outputFileTracingExcludes: {
+    "*": ["./data/**/*", "./.env*", "**/barker.sqlite*", "**/access-password.txt", "**/session-secret.txt"],
+  },
   poweredByHeader: false,
   turbopack: {},
   async headers() {

@@ -1,436 +1,180 @@
 "use client";
 
-import { Plus, RefreshCw, Search } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
-import { Gate } from "@/components/gate";
-import { Shell } from "@/components/nav";
+import { Button, Card, Dropdown, Input, Label, Tabs } from "@heroui/react";
+import { useEffect, useState } from "react";
+import { Glyph } from "@/components/icons";
+import { Confirm, Empty, IconButton, Notice, TaskBadge } from "@/components/primitives";
 import { Pagination } from "@/components/pagination";
-import { TaskCard } from "@/components/task-card";
-import { Alert } from "@/components/ui/alert";
-import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Textarea } from "@/components/ui/textarea";
-import { presetCron } from "@/lib/cron";
-import type { RecurrencePreset, Task, TaskStatus } from "@/lib/types";
-import { api, localDateValue, localInputValue, toOffsetDateTime } from "@/lib/ui";
+import { useResource } from "@/components/use-resource";
+import { useWorkspace } from "@/components/workspace-context";
+import type { Task } from "@/lib/types";
+import { api, errorMessage, formatTime, PRESET_LABELS } from "@/lib/ui";
 
-type LimitMode = "count" | "date";
-const PRESETS: Array<{ value: RecurrencePreset; label: string }> = [
-  { value: "daily", label: "每天" },
-  { value: "weekly", label: "每周" },
-  { value: "monthly", label: "每月" },
-  { value: "custom", label: "自定义" },
+const filters = [
+  { id: "all", label: "全部提醒" },
+  { id: "active", label: "进行中" },
+  { id: "paused", label: "已暂停" },
+  { id: "completed", label: "排期结束" },
+  { id: "archived", label: "已归档" },
 ];
-
-const PAGE_SIZE = 8;
-
-type TaskPageData = { authenticated: boolean; tasks: Task[]; total: number };
+const PAGE_SIZE = 10;
 
 export default function TasksPage() {
-  const [authed, setAuthed] = useState<boolean | null>(null);
-  const [tasks, setTasks] = useState<Task[]>([]);
-  const [total, setTotal] = useState(0);
+  const { openTask, refresh: refreshDashboard, notify } = useWorkspace();
+  const [filter, setFilter] = useState("all");
   const [page, setPage] = useState(1);
-  const [q, setQ] = useState("");
-  const [qInput, setQInput] = useState("");
-  const [status, setStatus] = useState<"" | TaskStatus>("");
-  const [editing, setEditing] = useState<Task | null>(null);
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [message, setMessage] = useState("");
-  const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [preset, setPreset] = useState<RecurrencePreset>("daily");
-  const [startsAt, setStartsAt] = useState(localInputValue());
-  const [cron, setCron] = useState("0 9 * * *");
-  const [limitMode, setLimitMode] = useState<LimitMode>("count");
-  const [repeatCount, setRepeatCount] = useState("30");
-  // Filled with the default (tomorrow in Asia/Shanghai) when 截止日期 mode is picked, so no impure date is computed during render.
-  const [endDate, setEndDate] = useState("");
-
-  const generatedCron = useMemo(() => {
-    if (preset === "custom") return cron;
-    return presetCron(preset, new Date(toOffsetDateTime(startsAt)));
-  }, [cron, preset, startsAt]);
-
-  const fetchCurrent = useCallback(async (): Promise<TaskPageData> => {
-    const session = await api<{ authenticated: boolean }>("/api/session");
-    if (!session.authenticated) return { authenticated: false, tasks: [], total: 0 };
-    const url = new URL("/api/tasks", window.location.origin);
-    url.searchParams.set("page", String(page));
-    url.searchParams.set("pageSize", String(PAGE_SIZE));
-    if (status) url.searchParams.set("status", status);
-    if (q.trim()) url.searchParams.set("q", q.trim());
-    const data = await api<{ tasks: Task[]; total: number; page: number; pageSize: number }>(`${url.pathname}${url.search}`);
-    return { authenticated: true, tasks: data.tasks, total: data.total };
-  }, [page, q, status]);
-
-  const apply = useCallback((data: TaskPageData) => {
-    setAuthed(data.authenticated);
-    setTasks(data.tasks);
-    setTotal(data.total);
-  }, []);
-
-  const load = useCallback(async () => { apply(await fetchCurrent()); }, [apply, fetchCurrent]);
-
+  const [query, setQuery] = useState("");
+  const [search, setSearch] = useState("");
+  const [archive, setArchive] = useState<Task | null>(null);
+  const [busy, setBusy] = useState("");
   useEffect(() => {
-    let alive = true;
-    void fetchCurrent().then(
-      (data) => { if (alive) apply(data); },
-      (err: unknown) => { if (alive) setError(err instanceof Error ? err.message : "无法加载"); },
-    );
-    return () => { alive = false; };
-  }, [apply, fetchCurrent]);
+    const timer = setTimeout(() => { setSearch(query); setPage(1); }, 250);
+    return () => clearTimeout(timer);
+  }, [query]);
 
-  useEffect(() => {
-    if (!authed) return;
-    let alive = true;
-    const timer = setInterval(() => {
-      void fetchCurrent().then((data) => { if (alive) apply(data); }, () => undefined);
-    }, 5_000);
-    return () => { alive = false; clearInterval(timer); };
-  }, [apply, authed, fetchCurrent]);
+  const params = new URLSearchParams({ page: String(page), pageSize: String(PAGE_SIZE), q: search });
+  if (filter !== "all") params.set("status", filter);
+  const { data, error, refresh } = useResource<{ tasks: Task[]; total: number }>(`/api/tasks?${params}`);
 
-  function resetForm() {
-    setPreset("daily");
-    setStartsAt(localInputValue());
-    setCron("0 9 * * *");
-    setLimitMode("count");
-    setRepeatCount("30");
-    setEndDate("");
+  function returnToPreviousPageIfEmpty() {
+    if (data?.tasks.length === 1 && page > 1) setPage(page - 1);
   }
 
-  function startCreate() {
-    setEditing(null);
-    setError("");
-    resetForm();
-    setDialogOpen(true);
-  }
-
-  function beginEdit(task: Task) {
-    setEditing(task);
-    setError("");
-    setPreset(task.preset);
-    setStartsAt(localInputValue(new Date(task.startsAt)));
-    setCron(task.cron);
-    setLimitMode(task.repeatCount ? "count" : "date");
-    setRepeatCount(String(task.repeatCount ?? 30));
-    setEndDate(task.endDate ?? localDateValue());
-    setDialogOpen(true);
-  }
-
-  function closeDialog() {
-    setDialogOpen(false);
-    setEditing(null);
-    resetForm();
-  }
-
-  function applySearch() {
-    setQ(qInput);
-    setPage(1);
-  }
-
-  async function saveTask(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    const formEl = e.currentTarget;
-    const form = new FormData(formEl);
-    const payload = {
-      name: String(form.get("name") || ""),
-      description: String(form.get("description") || ""),
-      startsAt: toOffsetDateTime(startsAt),
-      preset,
-      cron: generatedCron,
-      repeatCount: limitMode === "count" ? Number(repeatCount) : null,
-      endDate: limitMode === "date" ? endDate : null,
-    };
-    const wasEditing = editing !== null;
-    setBusy(true); setError(""); setMessage("");
+  async function toggle(task: Task) {
+    setBusy(task.id);
     try {
-      await api(editing ? `/api/tasks/${editing.id}` : "/api/tasks", { method: editing ? "PUT" : "POST", body: JSON.stringify(payload) });
-      setEditing(null);
-      formEl.reset();
-      // restore controlled defaults after reset
-      resetForm();
-      setMessage(wasEditing ? "任务已更新" : "任务已创建");
-      setDialogOpen(false);
-      setPage(1);
-      await load();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "保存失败");
-    } finally { setBusy(false); }
-  }
-
-  async function toggleStatus(task: Task) {
-    setError("");
-    try {
-      await api(`/api/tasks/${task.id}`, { method: "PATCH", body: JSON.stringify({ status: task.status === "paused" ? "active" : "paused" }) });
-      await load();
-    } catch (err) { setError(err instanceof Error ? err.message : "状态更新失败"); }
-  }
-
-  async function removeTask(task: Task) {
-    if (!window.confirm(`删除「${task.name}」？待发送的提醒必须先推送成功。`)) return;
-    try {
-      await api(`/api/tasks/${task.id}`, { method: "DELETE" });
-      await load();
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "删除失败";
-      // A task with permanently failing pushes can only be removed by force.
-      if (!message.includes("待重试")) { setError(message); return; }
-      if (!window.confirm(`「${task.name}」还有未推送成功的提醒。强制删除会丢弃这些提醒，确定继续？`)) return;
-      try {
-        await api(`/api/tasks/${task.id}?force=1`, { method: "DELETE" });
-        await load();
-      } catch (forceErr) {
-        setError(forceErr instanceof Error ? forceErr.message : "删除失败");
-      }
+      await api(`/api/tasks/${task.id}`, {
+        method: "PATCH", body: JSON.stringify({ status: task.status === "paused" ? "active" : "paused" }),
+      });
+      notify(task.status === "paused" ? "提醒已恢复，暂停期间不会补发。" : "提醒已暂停，已排队的消息会继续投递。");
+      if (filter !== "all") returnToPreviousPageIfEmpty();
+      await Promise.all([refresh(), refreshDashboard()]);
+    } catch (error) {
+      notify(errorMessage(error), "error");
+    } finally {
+      setBusy("");
     }
   }
 
-  if (authed === null) {
-    return (
-      <div className="grid min-h-[60vh] place-items-center px-4">
-        <p className="text-sm text-muted-foreground">正在确认访问权限…</p>
-      </div>
-    );
+  async function archiveTask() {
+    if (!archive) return;
+    setBusy(archive.id);
+    try {
+      await api(`/api/tasks/${archive.id}`, { method: "DELETE" });
+      setArchive(null);
+      returnToPreviousPageIfEmpty();
+      notify("提醒已归档。投递记录和待发送消息均已保留。");
+      await Promise.all([refresh(), refreshDashboard()]);
+    } catch (error) {
+      notify(errorMessage(error), "error");
+    } finally {
+      setBusy("");
+    }
   }
-  if (!authed) return <Gate onAuthed={() => void load()} />;
 
   return (
-    <Shell>
-      <div className="space-y-6">
-        <div className="flex flex-wrap items-end justify-between gap-4">
-          <div className="space-y-1.5">
-            <h1 className="text-xl font-semibold tracking-tight">任务</h1>
-            <p className="text-sm text-muted-foreground">
-              每页 {PAGE_SIZE} 条 · 按状态与关键词筛选 · Asia/Shanghai
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            <Button variant="ghost" size="icon" aria-label="刷新" title="刷新" onClick={() => void load()}>
-              <RefreshCw />
-            </Button>
-            <Button onClick={startCreate}>
-              <Plus />
-              新建任务
-            </Button>
-          </div>
+    <div className="page-stack">
+      <div className="page-heading">
+        <div>
+          <p className="eyebrow">把惦记的事，安排妥当</p>
+          <h1>所有提醒<span className="heading-period">。</span></h1>
+          <p>管理你的工作与日常，让重要的事按时发生。</p>
         </div>
-
-        {message && <Alert className="px-3 py-2">{message}</Alert>}
-        {error && !dialogOpen && (
-          <Alert variant="destructive" className="px-3 py-2">
-            {error}
-          </Alert>
-        )}
-
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex items-center gap-2">
-            <Input
-              placeholder="搜索名称 / 解释"
-              value={qInput}
-              onChange={(e) => setQInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  e.preventDefault();
-                  applySearch();
-                }
-              }}
-              className="w-full sm:w-64"
-            />
-            <Button variant="outline" type="button" onClick={applySearch}>
-              <Search />
-              搜索
-            </Button>
-          </div>
-          <div className="flex items-center gap-3">
-            <Select
-              value={status || "all"}
-              onValueChange={(value) => {
-                setStatus(value === "all" ? "" : (value as TaskStatus));
-                setPage(1);
-              }}
-            >
-              <SelectTrigger className="w-[140px]" aria-label="状态筛选">
-                <SelectValue placeholder="全部状态" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">全部状态</SelectItem>
-                <SelectItem value="active">运行中</SelectItem>
-                <SelectItem value="paused">已暂停</SelectItem>
-                <SelectItem value="completed">已完成</SelectItem>
-              </SelectContent>
-            </Select>
-            <span className="text-xs text-muted-foreground">共 {total} 条</span>
-          </div>
-        </div>
-
-        {tasks.length > 0 ? (
-          <Card className="divide-y divide-border overflow-hidden">
-            {tasks.map((t) => (
-              <TaskCard key={t.id} task={t} onEdit={beginEdit} onToggle={toggleStatus} onDelete={removeTask} />
-            ))}
-          </Card>
-        ) : (
-          <Card className="flex flex-col items-center gap-3 px-5 py-10 text-center">
-            <p className="text-sm text-muted-foreground">没有匹配的任务。试试调整筛选或新建一个。</p>
-            <Button type="button" onClick={startCreate}>
-              <Plus /> 新建任务
-            </Button>
-          </Card>
-        )}
-
-        <Pagination page={page} pageSize={PAGE_SIZE} total={total} onPageChange={setPage} />
-
-        <Dialog
-          open={dialogOpen}
-          onOpenChange={(next) => {
-            if (next) setDialogOpen(true);
-            else closeDialog();
-          }}
-        >
-          <DialogContent>
-            <div className="space-y-4">
-            <DialogHeader>
-              <DialogTitle>{editing ? "编辑任务" : "新建任务"}</DialogTitle>
-              <DialogDescription>预设按开始时间的墙钟时分生成 cron；自定义请输入标准五段格式。</DialogDescription>
-            </DialogHeader>
-            <form onSubmit={saveTask} className="grid gap-4">
-              {error && (
-                <Alert variant="destructive" className="px-3 py-2">
-                  {error}
-                </Alert>
-              )}
-              <div className="grid gap-2">
-                <Label htmlFor="task-name">名称</Label>
-                <Input
-                  id="task-name"
-                  name="name"
-                  required
-                  maxLength={80}
-                  defaultValue={editing?.name ?? ""}
-                  key={editing?.id ?? "new"}
-                  placeholder="如：喝水 / 站立提醒"
-                />
-              </div>
-              <div className="grid gap-2">
-                <Label htmlFor="task-description">解释</Label>
-                <Textarea
-                  id="task-description"
-                  name="description"
-                  maxLength={500}
-                  rows={3}
-                  defaultValue={editing?.description ?? ""}
-                  key={`${editing?.id ?? "new"}-desc`}
-                  placeholder="推送正文，可空"
-                />
-              </div>
-              <div className="grid gap-2">
-                <Label htmlFor="task-starts-at">开始时间</Label>
-                <Input
-                  id="task-starts-at"
-                  type="datetime-local"
-                  required
-                  value={startsAt}
-                  onChange={(e) => setStartsAt(e.target.value)}
-                />
-              </div>
-              <div className="grid gap-2">
-                <Label>周期</Label>
-                <Select value={preset} onValueChange={(value) => setPreset(value as RecurrencePreset)}>
-                  <SelectTrigger aria-label="周期预设">
-                    <SelectValue placeholder="每天" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {PRESETS.map((item) => (
-                      <SelectItem key={item.value} value={item.value}>
-                        {item.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="grid gap-2">
-                <Label htmlFor="task-cron">Cron</Label>
-                <Input
-                  id="task-cron"
-                  className={preset === "custom" ? "font-mono" : "cursor-default bg-muted/50 font-mono text-muted-foreground"}
-                  value={preset === "custom" ? cron : generatedCron}
-                  readOnly={preset !== "custom"}
-                  required={preset === "custom"}
-                  onChange={(e) => setCron(e.target.value)}
-                  placeholder="如：0 9 * * *"
-                />
-                {preset !== "custom" && (
-                  <p className="text-xs text-muted-foreground">由「开始时间」与周期自动生成；选择“自定义”可手动编辑。</p>
-                )}
-              </div>
-              <div className="grid gap-2">
-                <Label>结束条件</Label>
-                <Select
-                  value={limitMode}
-                  onValueChange={(value) => {
-                    const mode = value as LimitMode;
-                    setLimitMode(mode);
-                    if (mode === "date") setEndDate((cur) => cur || localDateValue(new Date(Date.now() + 86_400_000)));
-                  }}
-                >
-                  <SelectTrigger aria-label="结束条件">
-                    <SelectValue placeholder="重复次数" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="count">重复次数</SelectItem>
-                    <SelectItem value="date">截止日期</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              {limitMode === "count" ? (
-                <div className="grid gap-2">
-                  <Label htmlFor="task-repeat-count">次数</Label>
-                  <Input
-                    id="task-repeat-count"
-                    type="number"
-                    min={1}
-                    required
-                    value={repeatCount}
-                    onChange={(e) => setRepeatCount(e.target.value)}
-                  />
-                </div>
-              ) : (
-                <div className="grid gap-2">
-                  <Label htmlFor="task-end-date">截止日期</Label>
-                  <Input
-                    id="task-end-date"
-                    type="date"
-                    required
-                    value={endDate}
-                    onChange={(e) => setEndDate(e.target.value)}
-                  />
-                </div>
-              )}
-              <DialogFooter className="sticky -bottom-6 -mx-6 -mb-6 mt-2 border-t bg-background px-6 py-3">
-                <Button type="button" variant="outline" onClick={closeDialog}>
-                  取消
-                </Button>
-                <Button type="submit" disabled={busy}>
-                  保存
-                </Button>
-              </DialogFooter>
-            </form>
-            </div>
-          </DialogContent>
-        </Dialog>
+        <Button onPress={() => openTask()}><Glyph name="plus" size={17} />新建提醒</Button>
       </div>
-    </Shell>
+      <Card className="tasks-panel">
+        <div className="list-toolbar">
+          <Tabs selectedKey={filter} onSelectionChange={(key) => { setFilter(String(key)); setPage(1); }} variant="secondary" className="filter-tabs">
+            <Tabs.ListContainer>
+              <Tabs.List aria-label="提醒状态">
+                {filters.map((item) => <Tabs.Tab id={item.id} key={item.id}>{item.label}<Tabs.Indicator /></Tabs.Tab>)}
+              </Tabs.List>
+            </Tabs.ListContainer>
+          </Tabs>
+          <div className="search-field">
+            <Glyph name="search" size={17} />
+            <Input aria-label="搜索提醒" placeholder="搜索名称或内容…" value={query} onChange={(event) => setQuery(event.target.value)} variant="secondary" maxLength={200} />
+          </div>
+        </div>
+        {error && <Notice>{error}<Button variant="ghost" size="sm" onPress={() => void refresh()}>重试</Button></Notice>}
+        {!data ? <div className="loading-state">正在整理你的提醒…</div> : !data.tasks.length ? (
+          <Empty
+            title={search ? "没有找到相关提醒" : filter === "all" ? "给未来的自己，一个提醒" : "这里暂时没有提醒"}
+            description={search ? "试试其他关键词，或切换提醒状态。" : filter === "archived" ? "归档会停止未来排期，但始终保留消息和历史记录。" : "不必把所有事都记在心里，让 Barker 帮你分担。"}
+            action={filter === "all" && !search ? <Button variant="outline" onPress={() => openTask()}>创建第一个提醒</Button> : undefined}
+          />
+        ) : (
+          <div className="table-scroll">
+            <table className="task-table">
+              <thead>
+                <tr><th>提醒事项</th><th>重复周期</th><th>下一次提醒</th><th>投递进度</th><th>状态</th><th><span className="sr-only">操作</span></th></tr>
+              </thead>
+              <tbody>
+                {data.tasks.map((task) => (
+                  <tr key={task.id}>
+                    <td>
+                      <div className="task-name-cell">
+                        <span className={`task-symbol ${task.status === "paused" || task.status === "archived" ? "subdued" : ""}`}>
+                          <Glyph name={task.status === "archived" ? "archive" : "bell"} size={19} />
+                        </span>
+                        <div>
+                          <strong>{task.name}</strong>
+                          <p>{task.description || "给重要的事，留一个准时的提醒。"}</p>
+                          {task.lastError && task.pendingCount > 0 && <span className="task-error"><Glyph name="warning" size={12} />有消息等待重试</span>}
+                        </div>
+                      </div>
+                    </td>
+                    <td>
+                      <span className="schedule-cell"><Glyph name="refresh" size={13} />{PRESET_LABELS[task.preset]}</span>
+                      <code className="cron-caption">{task.cron}</code>
+                    </td>
+                    <td><span className="next-run-cell">{task.status === "active" ? formatTime(task.nextRunAt) : task.status === "paused" ? "恢复后继续" : "—"}</span></td>
+                    <td>
+                      <span className="progress-count">{task.sentCount}<span> / {task.repeatCount ?? "按日期"}</span></span>
+                      <small className="progress-caption">{task.pendingCount ? `${task.pendingCount} 条等待投递` : task.endDate ? `截至 ${task.endDate}` : "已送达"}</small>
+                    </td>
+                    <td><TaskBadge task={task} /></td>
+                    <td><TaskActions task={task} busy={busy === task.id} onToggle={() => void toggle(task)} onArchive={() => setArchive(task)} /></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        {data && <Pagination page={page} total={data.total} pageSize={PAGE_SIZE} onChange={setPage} />}
+      </Card>
+      <div className="page-note"><Glyph name="shield" size={16} /><p>暂停只停止未来排期，队列中的提醒仍会继续投递；归档不会删除任何消息。</p></div>
+      {archive && (
+        <Confirm title={`归档「${archive.name}」？`} confirmLabel="确认归档" onClose={() => setArchive(null)} onConfirm={() => void archiveTask()} busy={busy === archive.id}>
+          <p>未来的排期将停止。已经到期的提醒会继续投递，全部历史记录都会保留，你也可以随时复制为新提醒。</p>
+        </Confirm>
+      )}
+    </div>
+  );
+}
+
+function TaskActions({ task, busy, onToggle, onArchive }: { task: Task; busy: boolean; onToggle: () => void; onArchive: () => void }) {
+  const { openTask } = useWorkspace();
+  const editable = task.status === "active" || task.status === "paused";
+  return (
+    <div className="row-actions">
+      {editable && <IconButton label={`编辑 ${task.name}`} icon="edit" onPress={() => openTask(task)} isDisabled={busy} />}
+      <Dropdown>
+        <IconButton label={`更多操作 ${task.name}`} icon="more" isDisabled={busy} />
+        <Dropdown.Popover>
+          <Dropdown.Menu aria-label={`${task.name}的操作`} onAction={(key) => {
+            if (key === "toggle") onToggle();
+            if (key === "copy") openTask(task, true);
+            if (key === "archive") onArchive();
+          }}>
+            {editable && <Dropdown.Item id="toggle" textValue={task.status === "paused" ? "恢复提醒" : "暂停提醒"}>
+              <Glyph name={task.status === "paused" ? "play" : "pause"} /><Label>{task.status === "paused" ? "恢复提醒" : "暂停提醒"}</Label>
+            </Dropdown.Item>}
+            <Dropdown.Item id="copy" textValue="复制为新提醒"><Glyph name="copy" /><Label>复制为新提醒</Label></Dropdown.Item>
+            {task.status !== "archived" && <Dropdown.Item id="archive" textValue="归档提醒"><Glyph name="archive" /><Label>归档提醒</Label></Dropdown.Item>}
+          </Dropdown.Menu>
+        </Dropdown.Popover>
+      </Dropdown>
+    </div>
   );
 }

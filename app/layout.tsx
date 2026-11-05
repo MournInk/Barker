@@ -1,16 +1,14 @@
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
+import { Workspace } from "@/components/workspace";
+import "@fontsource-variable/manrope";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Barker · 可靠的 Bark 定时推送",
-  description: "按 cron 周期将提醒可靠推送到自建 Bark API — 指数退避无限重试，绝不丢弃。",
+  title: { default: "Barker · 让重要的事，如约而至", template: "%s · Barker" },
+  description: "一个安静、可靠的 Bark 提醒工作空间。安排周期任务，追踪每次投递，失败持续重试。",
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {
-  return (
-    <html lang="zh-CN">
-      <body className="min-h-screen bg-background text-foreground antialiased">{children}</body>
-    </html>
-  );
+  return <html lang="zh-CN"><body><Workspace>{children}</Workspace></body></html>;
 }

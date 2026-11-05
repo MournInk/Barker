@@ -1,5 +1,5 @@
-import { claimDelivery, dueTaskRows, getTask, markDeliveryFailed, markDeliverySent, readSettings, scheduleOccurrence, setTaskStatus } from "./db";
-import { BarkDeliveryError, sendBark } from "./bark";
+import { claimDelivery, dueTaskRows, getTask, markDeliveryFailed, markDeliverySent, readSettings, scheduleOccurrence } from "./db";
+import { sendBark } from "./bark";
 import type { BarkSettings } from "./types";
 
 let cycle: Promise<void> | null = null;
@@ -7,8 +7,6 @@ let cycle: Promise<void> | null = null;
 /** Bound the synchronous work per cycle so HTTP stays responsive after downtime. */
 const MAX_ENQUEUE_PER_CYCLE = 500;
 const MAX_DELIVERIES_PER_CYCLE = 20;
-/** Permanent failures (wrong key, revoked app, 404 …) auto-pause the task. */
-const PERMANENT_FAILURE_PAUSE_AFTER = 5;
 
 const yieldToEventLoop = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
 
@@ -36,7 +34,7 @@ export async function processOneDelivery(
   now = new Date(),
   deliver: (settings: BarkSettings, title: string, body: string) => Promise<void> = sendBark,
 ): Promise<boolean> {
-  // Leases are wall-clock based: a long cycle (up to 20 × 15s timeouts) would
+  // Leases are wall-clock based: a long cycle (up to 20 x 15s timeouts) would
   // otherwise hand out already-expired leases, letting another instance re-claim
   // an in-flight delivery and push it twice.
   const claimAt = new Date(Math.max(now.getTime(), Date.now()));
@@ -55,30 +53,25 @@ export async function processOneDelivery(
     const message = error instanceof Error ? error.message : "未知推送错误";
     markDeliveryFailed(item.id, item.leaseUntil, attempt, message, completedAt());
     console.error(`[Barker] delivery ${item.id} failed; attempt ${attempt} retained for retry: ${message}`);
-    if (error instanceof BarkDeliveryError && error.kind === "permanent" && attempt >= PERMANENT_FAILURE_PAUSE_AFTER) {
-      // Retrying a permanently rejected push forever only hammers the endpoint
-      // and grows the queue; pause the task and let the user fix the settings.
-      try {
-        const task = getTask(item.taskId);
-        if (task && task.status === "active") {
-          setTaskStatus(item.taskId, "paused", completedAt());
-          console.warn(`[Barker] task "${task.name}" paused after ${attempt} permanent delivery failures: ${message}`);
-        }
-      } catch (pauseError) {
-        console.error("[Barker] failed to pause a task after permanent delivery failures:", pauseError);
-      }
-    }
   }
   return true;
 }
 
-export async function runSchedulerCycle(now = new Date()): Promise<void> {
+/** Persist newly due reminders even while the previous cycle awaits Bark.
+ * Only the send loop is serialized; a slow endpoint must not stall scheduling.
+ */
+export async function runSchedulerCycle(now = new Date(), deliver = sendBark): Promise<void> {
+  try {
+    await enqueueDueOccurrences(now);
+  } catch (error) {
+    console.error("[Barker] enqueue failed; database state retained:", error);
+    return;
+  }
   if (cycle) return cycle;
   cycle = (async () => {
     try {
-      await enqueueDueOccurrences(now);
       for (let sent = 0; sent < MAX_DELIVERIES_PER_CYCLE; sent += 1) {
-        const processed = await processOneDelivery(now);
+        const processed = await processOneDelivery(now, deliver);
         if (!processed) break;
       }
     } catch (error) {
@@ -95,6 +88,7 @@ export async function runSchedulerCycle(now = new Date()): Promise<void> {
 const globalWorker = globalThis as typeof globalThis & { barkerSchedulerStarted?: boolean };
 
 export function startScheduler(): void {
+  if (process.env.BARKER_DISABLE_SCHEDULER === "1") return;
   if (globalWorker.barkerSchedulerStarted) return;
   globalWorker.barkerSchedulerStarted = true;
   const timer = setInterval(() => void runSchedulerCycle(), 2_000);

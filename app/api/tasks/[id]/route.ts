@@ -57,12 +57,9 @@ export async function DELETE(request: Request, context: RouteContext): Promise<N
   if (blocked) return blocked;
   const { id } = await context.params;
   if (!getTask(id)) return jsonError("任务不存在", 404);
-  // `?force=1` is the explicit escape hatch for a task whose deliveries can
-  // never succeed (wrong device key, deleted Bark app, …): discard them.
-  const force = new URL(request.url).searchParams.get("force") === "1";
   try {
-    deleteTask(id, new Date(), { force });
-    return NextResponse.json({ deleted: true, forced: force });
+    deleteTask(id);
+    return NextResponse.json({ archived: true });
   } catch (error) {
     return jsonError(error instanceof Error ? error.message : "无法删除任务", 409);
   }

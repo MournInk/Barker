@@ -4,15 +4,16 @@ import { BarkDeliveryError, sendBark } from "../lib/bark";
 import { DEFAULT_SETTINGS } from "../lib/types";
 
 test("Bark receives the configured endpoint and message", async () => {
-  let request: { url: string; body: Record<string, string> } | undefined;
+  let request: { url: string; body: Record<string, string>; redirect: RequestRedirect | undefined } | undefined;
   await sendBark({ ...DEFAULT_SETTINGS, endpoint: "https://example.test/", deviceKey: "key" }, "Rent", "Pay today", async (url, init) => {
-    request = { url: String(url), body: JSON.parse(String(init?.body)) as Record<string, string> };
+    request = { url: String(url), body: JSON.parse(String(init?.body)) as Record<string, string>, redirect: init?.redirect };
     return Response.json({ code: 200 });
   });
   assert.equal(request?.url, "https://example.test/push");
   assert.equal(request?.body.device_key, "key");
   assert.equal(request?.body.title, "Rent");
   assert.equal(request?.body.body, "Pay today");
+  assert.equal(request?.redirect, "error", "never forward a device key to a redirect target");
 });
 
 test("Bark application errors and missing credentials fail delivery", async () => {
@@ -37,8 +38,10 @@ test("a non-JSON 2xx is a failure (captive portal / proxy page), not a delivery"
       new Response("<html>captive portal</html>", { status: 200, headers: { "content-type": "text/html" } })),
     /非 JSON/,
   );
-  // Empty 2xx stays valid for Bark-compatible servers.
-  await sendBark({ ...DEFAULT_SETTINGS, endpoint: "https://example.test", deviceKey: "key" }, "T", "B", async () => new Response("", { status: 200 }));
+  // HTTP success without Bark acknowledgement is not proof of delivery.
+  for (const body of ["", "{}", "null", "[]"]) {
+    await assert.rejects(sendBark({ ...DEFAULT_SETTINGS, deviceKey: "key" }, "T", "B", async () => new Response(body, { status: 200 })), /无法识别/);
+  }
 });
 
 test("numeric-string codes are accepted and 4xx/5xx are classified", async () => {
@@ -50,5 +53,12 @@ test("numeric-string codes are accepted and 4xx/5xx are classified", async () =>
   await assert.rejects(
     sendBark({ ...DEFAULT_SETTINGS, endpoint: "https://example.test", deviceKey: "key" }, "T", "B", async () => new Response("", { status: 503 })),
     (error: unknown) => error instanceof BarkDeliveryError && error.kind === "transient",
+  );
+});
+
+test("oversized responses cannot be mistaken for acknowledged delivery", async () => {
+  await assert.rejects(
+    sendBark({ ...DEFAULT_SETTINGS, deviceKey: "key" }, "T", "B", async () => Response.json({ code: 200, padding: "x".repeat(17_000) })),
+    /响应过大/,
   );
 });

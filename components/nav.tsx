@@ -1,84 +1,42 @@
 "use client";
 
-import { Bell, LogOut } from "lucide-react";
+import { Button, Dropdown, Label, Modal } from "@heroui/react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { Button } from "@/components/ui/button";
-import { api } from "@/lib/ui";
-import { cn } from "@/lib/utils";
+import { useState, type ReactNode } from "react";
+import { Glyph, type IconName } from "./icons";
+import { IconButton } from "./primitives";
+import { useWorkspace } from "./workspace-context";
+import { errorMessage } from "@/lib/ui";
 
-const NAV = [
-  { href: "/", label: "概览" },
-  { href: "/tasks", label: "任务" },
-  { href: "/settings", label: "设置" },
-] as const;
+const navigation: Array<{ href: string; label: string; icon: IconName }> = [
+  { href: "/", label: "工作概览", icon: "squares" },
+  { href: "/tasks", label: "所有提醒", icon: "calendar" },
+  { href: "/deliveries", label: "投递记录", icon: "send" },
+  { href: "/settings", label: "推送设置", icon: "gear" },
+];
 
-export function Shell({ children }: { children: React.ReactNode }) {
-  const pathname = usePathname();
+export function Shell({ children }: { children: ReactNode }) {
+  const path = usePathname();
   const router = useRouter();
-
-  async function signOut() {
-    try {
-      await api("/api/session", { method: "DELETE" });
-      router.push("/");
-      router.refresh();
-    } catch {
-      // best effort
-    }
-  }
-
-  return (
-    <div className="flex min-h-screen flex-col bg-background">
-      <header className="sticky top-0 z-40 border-b border-border bg-background/95 backdrop-blur">
-        <div className="mx-auto flex h-14 max-w-5xl items-center gap-6 px-4 sm:px-6">
-          <Link
-            href="/"
-            className="flex shrink-0 items-center gap-2 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
-            aria-label="Barker 首页"
-          >
-            <span className="grid size-7 place-items-center rounded-md bg-primary text-primary-foreground">
-              <Bell className="size-4" />
-            </span>
-            <span className="text-sm font-semibold tracking-tight max-[380px]:hidden">Barker</span>
-            <span className="hidden text-xs text-muted-foreground sm:inline">北京时间 · 可靠提醒</span>
-          </Link>
-
-          <nav aria-label="主导航" className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto sm:gap-1">
-            {NAV.map((item) => {
-              const active = item.href === "/" ? pathname === "/" : pathname.startsWith(item.href);
-              return (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  aria-current={active ? "page" : undefined}
-                  className={cn(
-                    "rounded-md px-2.5 py-2 text-sm whitespace-nowrap outline-none transition-colors sm:px-3 sm:py-1.5 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
-                    active
-                      ? "bg-secondary font-medium text-foreground"
-                      : "text-muted-foreground hover:bg-accent hover:text-foreground",
-                  )}
-                >
-                  {item.label}
-                </Link>
-              );
-            })}
-          </nav>
-
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            onClick={() => void signOut()}
-            aria-label="退出登录"
-            className="shrink-0 gap-2 text-muted-foreground hover:text-foreground"
-          >
-            <LogOut className="size-4" />
-            <span className="hidden sm:inline">退出登录</span>
-          </Button>
-        </div>
-      </header>
-
-      <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-8 sm:px-6">{children}</main>
+  const { dashboard, error, refresh, openTask, logout, notify } = useWorkspace();
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const current = navigation.find((item) => item.href === path)?.label ?? "工作空间";
+  const sidebar = <>
+    <Link href="/" className="brand" onClick={() => setMobileOpen(false)} aria-label="Barker 工作概览"><span className="brand-mark"><Glyph name="bell" size={22} /></span><span>barker<span className="brand-period">.</span></span></Link>
+    <Button className="sidebar-create" variant="outline" onPress={() => { setMobileOpen(false); openTask(); }}><Glyph name="plus" />新建提醒</Button>
+    <p className="nav-section">我的工作空间</p>
+    <nav aria-label="主导航">{navigation.map((item) => <Link href={item.href} key={item.href} className={`nav-item ${path === item.href ? "selected" : ""}`} aria-current={path === item.href ? "page" : undefined} onClick={() => setMobileOpen(false)}><Glyph name={item.icon} /><span>{item.label}</span>{item.href === "/tasks" && !!dashboard?.stats.active && <span className="nav-count">{dashboard.stats.active}</span>}{item.href === "/deliveries" && !!dashboard?.deliveries.retrying && <span className="nav-count caution">{dashboard.deliveries.retrying}</span>}</Link>)}</nav>
+    <div className="sidebar-bottom"><div className="sidebar-note"><Glyph name="shield" size={22} /><h3>重要的事，不会遗漏</h3><p>提醒持久保存，失败自动重试。<br />让你安心专注当下。</p></div>
+      <Dropdown><Button variant="ghost" className="account-button"><span className="account-avatar">B</span><span className="account-label">个人工作空间<small>安全访问已开启</small></span><Glyph name="chevronDown" size={14} /></Button><Dropdown.Popover className="account-menu"><Dropdown.Menu onAction={(key) => { setMobileOpen(false); if (key === "settings") router.push("/settings"); if (key === "logout") void logout().catch((error) => notify(errorMessage(error), "error")); }}><Dropdown.Item id="settings" textValue="推送设置"><Glyph name="gear" /><Label>推送设置</Label></Dropdown.Item><Dropdown.Item id="logout" textValue="退出工作空间"><Glyph name="logout" /><Label>退出工作空间</Label></Dropdown.Item></Dropdown.Menu></Dropdown.Popover></Dropdown>
     </div>
-  );
+  </>;
+  return <div className="app-layout">
+    <a href="#main" className="skip-link">跳转到主要内容</a>
+    <aside className="sidebar">{sidebar}</aside>
+    <div className="main-layout"><header className="topbar"><div className="breadcrumb"><span className="mobile-toggle"><IconButton icon="menu" label="打开导航" onPress={() => setMobileOpen(true)} /></span><span className="breadcrumb-root">工作空间</span><Glyph name="chevron" size={12} /><span>{current}</span></div><div className="topbar-trailing"><span className={`sync-status ${error ? "offline" : ""}`}><span className="status-dot" />{error ? "同步中断" : dashboard ? "自动同步中" : "正在连接"}</span><span className="timezone">UTC +08:00</span><IconButton icon="refresh" label="刷新工作空间" onPress={() => void refresh()} /></div></header>
+      <main id="main" className="workspace-main">{children}</main><footer className="workspace-footer"><span>留给生活更多从容。</span><span>Barker <span className="footer-dot" /> 按北京时间调度</span></footer>
+    </div>
+    <Modal.Backdrop isOpen={mobileOpen} onOpenChange={setMobileOpen}><Modal.Container placement="top" size="sm"><Modal.Dialog className="mobile-nav-dialog"><div className="mobile-nav-heading"><Modal.Heading>工作空间</Modal.Heading><IconButton icon="close" label="关闭导航" onPress={() => setMobileOpen(false)} /></div><div className="mobile-nav-content">{sidebar}</div></Modal.Dialog></Modal.Container></Modal.Backdrop>
+  </div>;
 }

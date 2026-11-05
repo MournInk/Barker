@@ -5,8 +5,8 @@ import type { BarkSettings } from "./types";
  * - permanent: the request itself was rejected (bad device key, revoked app,
  *   404 …) — retrying the same payload cannot succeed;
  * - transient: network/timeout/5xx/429 — worth retrying with backoff.
- * The scheduler uses this to stop hammering an endpoint that will never accept
- * the push (and to pause the task after repeated permanent failures).
+ * Both kinds remain in the outbox. Classification is diagnostic only; no
+ * response is allowed to silently discard a scheduled reminder.
  */
 export type BarkFailureKind = "permanent" | "transient";
 
@@ -29,6 +29,24 @@ export function barkPushUrl(endpoint: string): URL {
   return new URL("push", `${endpoint.replace(/\/+$/, "")}/`);
 }
 
+async function responseText(response: Response): Promise<string> {
+  const reader = response.body?.getReader();
+  if (!reader) return "";
+  const chunks: Uint8Array[] = [];
+  let bytes = 0;
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    bytes += value.byteLength;
+    if (bytes > 16_384) {
+      await reader.cancel();
+      throw new BarkDeliveryError("Bark API 响应过大，无法确认送达");
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks).toString("utf8").trim();
+}
+
 export async function sendBark(
   settings: BarkSettings,
   title: string,
@@ -44,6 +62,7 @@ export async function sendBark(
     const url = barkPushUrl(settings.endpoint);
     const response = await fetcher(url, {
       method: "POST",
+      redirect: "error",
       headers: { "content-type": "application/json", accept: "application/json" },
       body: JSON.stringify({
         device_key: settings.deviceKey,
@@ -55,7 +74,7 @@ export async function sendBark(
       }),
       signal: controller.signal,
     });
-    const text = (await response.text().catch(() => "")).trim();
+    const text = await responseText(response);
     if (!response.ok) {
       throw new BarkDeliveryError(`Bark API 返回 HTTP ${response.status}`, {
         kind: PERMANENT_HTTP_STATUSES.has(response.status) ? "permanent" : "transient",
@@ -75,10 +94,10 @@ export async function sendBark(
     }
     // Some compatible servers return the code as a string.
     const code = result?.code === undefined ? undefined : Number(result.code);
-    if (code !== undefined && !Number.isFinite(code)) {
+    if (code === undefined || !Number.isFinite(code)) {
       throw new BarkDeliveryError("Bark API 返回了无法识别的响应", { kind: "transient" });
     }
-    if (code !== undefined && code !== 200) {
+    if (code !== 200) {
       throw new BarkDeliveryError(`Bark API 拒绝推送${result?.message ? `：${String(result.message).slice(0, 120)}` : ""}`, {
         kind: "permanent",
       });

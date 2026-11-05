@@ -1,4 +1,4 @@
-export type RecurrencePreset = "daily" | "weekly" | "monthly" | "custom";
+export type RecurrencePreset = "daily" | "weekdays" | "weekly" | "monthly" | "custom";
 
 /**
  * Single source of truth for the scheduler wall clock. Kept in this dependency-free
@@ -7,7 +7,7 @@ export type RecurrencePreset = "daily" | "weekly" | "monthly" | "custom";
  */
 export const SCHEDULE_TIME_ZONE = "Asia/Shanghai";
 
-export type TaskStatus = "active" | "paused" | "completed";
+export type TaskStatus = "active" | "paused" | "completed" | "archived";
 
 export interface Task {
   id: string;
@@ -19,6 +19,8 @@ export interface Task {
   repeatCount: number | null;
   endDate: string | null;
   sentCount: number;
+  queuedCount: number;
+  pendingCount: number;
   nextRunAt: string | null;
   lastRunAt: string | null;
   lastError: string | null;
@@ -36,11 +38,6 @@ export interface BarkSettings {
   icon: string;
 }
 
-export interface StoreData {
-  settings: BarkSettings;
-  tasks: Task[];
-}
-
 export interface TaskInput {
   name: string;
   description?: string;
@@ -49,6 +46,35 @@ export interface TaskInput {
   cron: string;
   repeatCount?: number | null;
   endDate?: string | null;
+}
+
+export type DeliveryStatus = "pending" | "sending" | "sent";
+export type DeliveryFilter = DeliveryStatus | "retrying";
+
+export interface Delivery {
+  id: string;
+  taskId: string;
+  taskName: string;
+  description: string;
+  occurrenceAt: string;
+  status: DeliveryStatus;
+  attempts: number;
+  lastError: string | null;
+  nextAttemptAt: string;
+  deliveredAt: string | null;
+  createdAt: string;
+}
+
+export interface Dashboard {
+  tasks: Task[];
+  upcoming: Array<{ taskId: string; occurrenceAt: string }>;
+  deviceKeyConfigured: boolean;
+  endpoint: string;
+  deliveries: { pending: number; retrying: number; nextRetryAt: string | null };
+  stats: { active: number; paused: number; todaySent: number; totalSent: number };
+  activity: Array<{ date: string; sent: number }>;
+  recent: Delivery[];
+  serverTime: string;
 }
 
 export const DEFAULT_SETTINGS: BarkSettings = {

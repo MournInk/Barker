@@ -31,8 +31,23 @@ export async function requestBody(request: Request): Promise<unknown> {
   }
   let text: string;
   try {
-    text = await request.text();
-  } catch {
+    const reader = request.body?.getReader();
+    if (!reader) throw new HttpError("请求必须包含有效 JSON", 400);
+    const chunks: Uint8Array[] = [];
+    let bytes = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytes += value.byteLength;
+      if (bytes > MAX_REQUEST_BYTES) {
+        await reader.cancel();
+        throw new HttpError("请求体过大", 413);
+      }
+      chunks.push(value);
+    }
+    text = Buffer.concat(chunks).toString("utf8");
+  } catch (error) {
+    if (error instanceof HttpError) throw error;
     throw new HttpError("无法读取请求体", 400);
   }
   if (Buffer.byteLength(text, "utf8") > MAX_REQUEST_BYTES) throw new HttpError("请求体过大", 413);

@@ -1,211 +1,41 @@
 "use client";
 
-import { ArrowRight, Plus, RefreshCw } from "lucide-react";
+import { Button, Card, Chip } from "@heroui/react";
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
-import { Gate } from "@/components/gate";
-import { Shell } from "@/components/nav";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import type { BarkSettings, Task } from "@/lib/types";
-import { api, formatTime } from "@/lib/ui";
-
-type Overview = {
-  tasks: Task[];
-  settings: Omit<BarkSettings, "deviceKey">;
-  deviceKeyConfigured: boolean;
-  deliveries: { pending: number; retrying: number; nextRetryAt: string | null };
-  retryQueue: Array<{ taskId: string; taskName: string; occurrenceAt: string; attempts: number; lastError: string | null; nextAttemptAt: string }>;
-};
-
-type OverviewData = { authenticated: boolean; overview: Overview | null };
-
-async function fetchOverview(): Promise<OverviewData> {
-  const session = await api<{ authenticated: boolean }>("/api/session");
-  if (!session.authenticated) return { authenticated: false, overview: null };
-  return { authenticated: true, overview: await api<Overview>("/api/overview") };
-}
-
-const statusMeta: Record<Task["status"], { label: string; variant: "success" | "warning" | "secondary" }> = {
-  active: { label: "运行中", variant: "success" },
-  paused: { label: "已暂停", variant: "warning" },
-  completed: { label: "已完成", variant: "secondary" },
-};
+import { useState } from "react";
+import { Glyph, type IconName } from "@/components/icons";
+import { Empty, TaskBadge } from "@/components/primitives";
+import { useWorkspace } from "@/components/workspace-context";
+import { clockTime, formatTime, localDateValue, PRESET_LABELS, SCHEDULE_TIME_ZONE } from "@/lib/ui";
 
 export default function OverviewPage() {
-  const [authed, setAuthed] = useState<boolean | null>(null);
-  const [overview, setOverview] = useState<Overview | null>(null);
-  const [error, setError] = useState("");
-
-  const apply = useCallback((page: OverviewData) => {
-    setAuthed(page.authenticated);
-    setOverview(page.overview);
-  }, []);
-
-  const load = useCallback(async () => { apply(await fetchOverview()); }, [apply]);
-
-  useEffect(() => {
-    let alive = true;
-    void fetchOverview().then(
-      (page) => { if (alive) apply(page); },
-      (err: unknown) => { if (alive) setError(err instanceof Error ? err.message : "无法加载"); },
-    );
-    return () => { alive = false; };
-  }, [apply]);
-
-  useEffect(() => {
-    if (!authed) return;
-    let alive = true;
-    const timer = setInterval(() => {
-      void fetchOverview().then(
-        (page) => { if (alive) apply(page); },
-        () => undefined,
-      );
-    }, 5_000);
-    return () => { alive = false; clearInterval(timer); };
-  }, [apply, authed]);
-
-  if (authed === null) {
-    return (
-      <div className="grid min-h-[60vh] place-items-center px-4">
-        <p className="text-sm text-muted-foreground">正在确认访问权限…</p>
-      </div>
-    );
-  }
-  if (!authed) return <Gate onAuthed={() => void load()} />;
-
-  const tasks = overview?.tasks ?? [];
-  const active = tasks.filter((t) => t.status === "active").length;
-  const paused = tasks.filter((t) => t.status === "paused").length;
-  const completed = tasks.filter((t) => t.status === "completed").length;
-  const retryQueue = overview?.retryQueue ?? [];
-
-  return (
-    <Shell>
-      <div className="space-y-6">
-        <div className="flex flex-wrap items-end justify-between gap-4">
-          <div className="space-y-1.5">
-            <div className="flex flex-wrap items-center gap-2">
-              <h1 className="text-xl font-semibold tracking-tight">概览</h1>
-              <Badge variant={overview?.deviceKeyConfigured ? "success" : "secondary"}>
-                {overview?.deviceKeyConfigured ? "Bark 已配置" : "Bark 未配置"}
-              </Badge>
-            </div>
-            <p className="text-sm text-muted-foreground">
-              北京时间调度 · 每条到期提醒落库为 delivery，失败按指数退避无限重试。
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            <Button variant="ghost" size="icon" aria-label="刷新" title="刷新" onClick={() => void load()}>
-              <RefreshCw />
-            </Button>
-            <Button asChild>
-              <Link href="/tasks">
-                <Plus /> 新建任务
-              </Link>
-            </Button>
-          </div>
-        </div>
-
-        {error && (
-          <Alert variant="destructive">
-            <AlertTitle>加载失败</AlertTitle>
-            <AlertDescription>{error}</AlertDescription>
-          </Alert>
-        )}
-
-        <Card className="grid grid-cols-3 divide-x divide-border">
-          <div className="p-4 sm:p-5">
-            <p className="text-xs font-medium text-muted-foreground">待推送</p>
-            <p className="mt-2 text-lg font-semibold tabular-nums leading-tight sm:text-2xl">{overview?.deliveries.pending ?? 0}</p>
-            <p className="mt-1 hidden text-xs text-muted-foreground sm:block">队列中</p>
-          </div>
-          <div className="p-4 sm:p-5">
-            <p className="text-xs font-medium text-muted-foreground">重试中</p>
-            <p className="mt-2 text-lg font-semibold tabular-nums leading-tight sm:text-2xl">{overview?.deliveries.retrying ?? 0}</p>
-            <p className="mt-1 hidden text-xs text-muted-foreground sm:block">5s → 1h 指数退避</p>
-          </div>
-          <div className="p-4 sm:p-5">
-            <p className="text-xs font-medium text-muted-foreground">下次重试</p>
-            <p className="mt-2 text-sm font-semibold tabular-nums leading-snug break-words sm:text-2xl">
-              {formatTime(overview?.deliveries.nextRetryAt ?? null)}
-            </p>
-            <p className="mt-1 hidden text-xs text-muted-foreground sm:block">最近的 delivery</p>
-          </div>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <div className="flex items-center justify-between gap-3">
-              <CardTitle className="text-sm font-medium">最近任务</CardTitle>
-              <Link
-                href="/tasks"
-                className="text-xs text-muted-foreground transition-colors hover:text-foreground"
-              >
-                查看全部
-              </Link>
-            </div>
-            <CardDescription className="text-xs">
-              共 {tasks.length} 条 · 运行中 {active} · 已暂停 {paused} · 已完成 {completed}
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            {tasks.length === 0 ? (
-              <p className="py-8 text-center text-sm text-muted-foreground">
-                还没有任务。去{" "}
-                <Link href="/tasks" className="font-medium text-foreground underline underline-offset-4 hover:text-foreground/80">
-                  任务
-                </Link>{" "}
-                新建一个吧。
-              </p>
-            ) : (
-              <div className="divide-y divide-border">
-                {tasks.slice(0, 6).map((task) => {
-                  const status = statusMeta[task.status];
-                  return (
-                    <div key={task.id} className="flex items-start justify-between gap-4 py-3 first:pt-0 last:pb-0">
-                      <div className="min-w-0 space-y-1">
-                        <p className="truncate text-sm font-medium">{task.name}</p>
-                        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-                          <Badge variant={status.variant}>{status.label}</Badge>
-                          <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] text-foreground/80">{task.cron}</code>
-                          <span aria-hidden className="text-muted-foreground/40">·</span>
-                          <span>下次 {formatTime(task.nextRunAt)}</span>
-                        </div>
-                      </div>
-                      <Link
-                        href="/tasks"
-                        aria-label={`管理任务 ${task.name}`}
-                        className="mt-0.5 shrink-0 text-muted-foreground transition-colors hover:text-foreground"
-                      >
-                        <ArrowRight className="size-4" />
-                      </Link>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
-        {retryQueue.length > 0 && (
-          <Alert>
-            <AlertTitle>重试队列</AlertTitle>
-            <AlertDescription>
-              <ul className="mt-2 space-y-1">
-                {retryQueue.map((item) => (
-                  <li key={`${item.taskId}-${item.occurrenceAt}`} className="text-xs leading-5">
-                    {item.taskName} · 第 {item.attempts} 次失败 · {item.lastError ?? "—"} · 下次{" "}
-                    {formatTime(item.nextAttemptAt)}
-                  </li>
-                ))}
-              </ul>
-            </AlertDescription>
-          </Alert>
-        )}
-      </div>
-    </Shell>
-  );
+  const { dashboard, openTask } = useWorkspace();
+  const [selectedDay, setSelectedDay] = useState<string | null>(null);
+  const upcoming = (dashboard?.tasks ?? []).filter((task) => task.status === "active" && task.nextRunAt).sort((a, b) => a.nextRunAt!.localeCompare(b.nextRunAt!));
+  const displayed = selectedDay ? (dashboard?.upcoming ?? []).filter((item) => localDateValue(new Date(item.occurrenceAt)) === selectedDay).flatMap((item) => {
+    const task = dashboard?.tasks.find((task) => task.id === item.taskId);
+    return task ? [{ ...task, nextRunAt: item.occurrenceAt }] : [];
+  }) : upcoming;
+  const next = upcoming[0];
+  const now = dashboard ? new Date(dashboard.serverTime) : null;
+  const days = now ? Array.from({ length: 7 }, (_, index) => new Date(now.getTime() + index * 86_400_000)) : [];
+  const metrics: Array<{ label: string; value: number | undefined; detail: string; icon: IconName; caution?: boolean }> = [
+    { label: "进行中的提醒", value: dashboard?.stats.active, detail: "有条不紊，按计划进行", icon: "calendar" },
+    { label: "今日已送达", value: dashboard?.stats.todaySent, detail: "每一条，都有迹可循", icon: "circleCheck" },
+    { label: "等待投递", value: dashboard?.deliveries.pending, detail: "已安全保存在投递队列", icon: "send" },
+    { label: "自动重试中", value: dashboard?.deliveries.retrying, detail: dashboard?.deliveries.retrying ? "消息仍在，正在重新尝试" : "目前没有需要重试的消息", icon: "refresh", caution: Boolean(dashboard?.deliveries.retrying) },
+  ];
+  const maxActivity = Math.max(1, ...(dashboard?.activity.map((day) => day.sent) ?? [1]));
+  return <div className="page-stack">
+    <div className="page-heading"><div><p className="eyebrow">为重要的事，留一个位置</p><h1>日常有序，心里有数<span className="heading-period">。</span></h1><p>欢迎回到 Barker，你的每一个安排都在这里。</p></div><span className="today-label"><Glyph name="calendar" size={16} />{now ? new Intl.DateTimeFormat("zh-CN", { timeZone: SCHEDULE_TIME_ZONE, month: "long", day: "numeric", weekday: "long" }).format(now) : "正在同步日期"}</span></div>
+    {dashboard && !dashboard.deviceKeyConfigured && <div className="setup-banner"><span className="setup-symbol"><Glyph name="link" size={20} /></span><div><strong>让提醒找到你</strong><p>连接你的 Bark 设备，开启第一次准时抵达。</p></div><Link href="/settings" className="text-action">连接 Bark<Glyph name="arrow" size={16} /></Link></div>}
+    <div className="hero-grid"><section className="welcome-panel"><div className="hero-copy"><span className="hero-kicker"><span className="status-dot" />为专注，留出更多空间</span><h2>每一次提醒，<br />都如约而至。</h2><p>工作、生活，以及那些不想忘记的小事。<br />安排一次，剩下的交给 Barker。</p><Button variant="secondary" className="hero-button" onPress={() => openTask()}>创建一个提醒<Glyph name="plus" size={17} /></Button></div><div className="hero-orbit" aria-hidden="true"><span className="orbit-path path-one" /><span className="orbit-path path-two" /><span className="orbit-dashed" /><span className="hero-bell"><Glyph name="bell" size={45} /></span><span className="orbit-point point-one" /><span className="orbit-point point-two" /><span className="orbit-tick tick-one" /><span className="orbit-tick tick-two" /><span className="orbit-leaf"><Glyph name="check" size={17} /></span></div><span className="hero-caption">A little reminder. A lighter mind.</span></section>
+      <Card className="next-panel"><div className="section-top"><h2>下一个时刻</h2><span className="mini-label">即将到来</span></div>{next ? <><div className="next-time">{clockTime(next.nextRunAt!)}<span>{formatTime(next.nextRunAt!, { hour: undefined, minute: undefined })}</span></div><div className="next-task"><span className="task-symbol"><Glyph name="bell" size={21} /></span><div><h3>{next.name}</h3><p>{next.description || "计划提醒时间已到。"}</p></div></div><div className="next-bottom"><span><Glyph name="refresh" size={14} />{PRESET_LABELS[next.preset]}</span><Link href="/tasks" className="text-action">管理提醒<Glyph name="arrow" size={15} /></Link></div></> : <div className="next-empty"><span className="next-empty-clock"><Glyph name="clock" size={33} /></span><h3>好时光，待安排</h3><p>新建一个提醒，<br />让下一件重要的事准时发生。</p><Button variant="ghost" size="sm" onPress={() => openTask()}>开始安排<Glyph name="arrow" size={15} /></Button></div>}</Card>
+    </div>
+    <section className="metrics-grid" aria-label="提醒概况">{metrics.map((metric) => <Card key={metric.label} className="metric-card"><div><p>{metric.label}</p><strong className={metric.caution ? "text-warning" : ""}>{metric.value ?? "—"}<small>条</small></strong><span>{metric.detail}</span></div><span className={`metric-symbol ${metric.caution ? "caution" : ""}`}><Glyph name={metric.icon} size={21} /></span></Card>)}</section>
+    <div className="overview-detail-grid"><Card className="upcoming-panel"><div className="section-top"><div><h2>接下来的安排</h2><p>给未来的每一天，留一点从容。</p></div><Link href="/tasks" className="text-action muted-action">全部提醒<Glyph name="arrow" size={15} /></Link></div><div className="week-strip"><button className={`week-all ${selectedDay === null ? "chosen" : ""}`} onClick={() => setSelectedDay(null)} aria-pressed={selectedDay === null}>全部<small>安排</small></button>{days.map((day, index) => { const date = localDateValue(day); return <button key={date} className={selectedDay === date ? "chosen" : ""} aria-pressed={selectedDay === date} onClick={() => setSelectedDay(date)}><small>{index === 0 ? "今天" : new Intl.DateTimeFormat("zh-CN", { timeZone: SCHEDULE_TIME_ZONE, weekday: "short" }).format(day)}</small><span>{day.getUTCDate() === Number(date.slice(8)) ? day.getUTCDate() : Number(date.slice(8))}</span></button>; })}</div>
+      {!dashboard ? <div className="loading-state">正在同步你的安排…</div> : !displayed.length ? <Empty title={selectedDay ? "这一天，暂时留白" : "从一个小提醒开始"} description={selectedDay ? "没有即将到来的提醒，享受当下的从容。" : "无论是工作复盘还是生活小事，都值得被好好记住。"} action={<Button variant="outline" size="sm" onPress={() => openTask()}>新建提醒<Glyph name="plus" size={14} /></Button>} /> : <div className="upcoming-list">{displayed.slice(0, 4).map((task) => <button className="upcoming-row" key={`${task.id}:${task.nextRunAt}`} onClick={() => openTask(task)}><span className="upcoming-time">{clockTime(task.nextRunAt!)}<small>{localDateValue(new Date(task.nextRunAt!)).slice(5).replace("-", "/")}</small></span><span className="upcoming-copy"><strong>{task.name}</strong><small>{PRESET_LABELS[task.preset]}<span>·</span>{task.description || `${task.sentCount} 次已送达`}</small></span><TaskBadge task={task} /><Glyph name="chevron" size={14} className="row-chevron" /></button>)}</div>}
+    </Card><Card className="activity-panel"><div className="section-top"><h2>投递节奏</h2><span className="mini-label">最近 7 天</span></div><div className="activity-total"><strong>{dashboard?.activity.reduce((sum, day) => sum + day.sent, 0) ?? "—"}</strong><span>条提醒已送达</span></div><div className="activity-chart" role="img" aria-label={dashboard?.activity.map((day) => `${day.date}：${day.sent}条送达`).join("；") ?? "正在加载"}>{dashboard?.activity.map((day, index) => <div className="activity-column" key={day.date}><div className={`activity-bar ${index === 6 ? "today" : ""}`} style={{ height: `${Math.max(3, day.sent / maxActivity * 88)}px` }} title={`${day.date} · ${day.sent} 条`} /><span>{index === 6 ? "今天" : day.date.slice(5).replace("-", "/")}</span></div>)}</div><div className="activity-footnote"><Glyph name="shield" size={17} /><span>每一次送达，都被认真记录。</span></div></Card></div>
+    <Card className="recent-panel"><div className="section-top"><div><h2>最近投递</h2><p>从排队到送达，每一步都有回音。</p></div><Link href="/deliveries" className="text-action muted-action">查看记录<Glyph name="arrow" size={15} /></Link></div>{dashboard?.recent.length ? <div className="recent-list">{dashboard.recent.slice(0, 3).map((item) => <div key={item.id} className="recent-row"><span className={`delivery-symbol ${item.status === "sent" ? "delivered" : item.lastError ? "retrying" : ""}`}><Glyph name={item.status === "sent" ? "check" : item.lastError ? "refresh" : "clock"} size={17} /></span><div><strong>{item.taskName}</strong><small>{item.status === "sent" ? "提醒已成功送达 Bark" : item.lastError ? "已保留，等待自动重试" : "提醒已加入投递队列"}</small></div><time dateTime={item.deliveredAt ?? item.createdAt}>{formatTime(item.deliveredAt ?? item.createdAt)}</time><Chip variant="soft" color={item.status === "sent" ? "success" : item.lastError ? "warning" : "default"} size="sm">{item.status === "sent" ? "已送达" : item.lastError ? "重试中" : "待投递"}</Chip></div>)}</div> : <div className="inline-empty"><Glyph name="inbox" size={20} /><p>还没有投递记录。第一条提醒抵达时，会在这里留下足迹。</p></div>}</Card>
+  </div>;
 }

@@ -1,5 +1,5 @@
 export async function register(): Promise<void> {
-  if (process.env.NEXT_RUNTIME !== "nodejs") return;
+  if (process.env.NEXT_RUNTIME !== "nodejs" || process.env.BARKER_DISABLE_SCHEDULER === "1") return;
   const [{ printRuntimePassword }, { startScheduler }] = await Promise.all([
     import("./lib/auth"),
     import("./lib/scheduler"),
