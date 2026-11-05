@@ -1,99 +1,75 @@
-import { SCHEDULE_TIME_ZONE } from "./types";
-
-export type Overview = {
-  tasks: import("./types").Task[];
-  settings: Omit<import("./types").BarkSettings, "deviceKey">;
-  deviceKeyConfigured: boolean;
-  deliveries: { pending: number; retrying: number; nextRetryAt: string | null };
-  retryQueue: Array<{ taskId: string; taskName: string; occurrenceAt: string; attempts: number; lastError: string | null; nextAttemptAt: string }>;
-};
+import { SCHEDULE_TIME_ZONE, type RecurrencePreset } from "./types";
 
 export { SCHEDULE_TIME_ZONE };
 
-type WallClock = { year: number; month: number; day: number; hour: number; minute: number; second: number };
+export const PRESET_LABELS: Record<RecurrencePreset, string> = {
+  daily: "每天", weekdays: "工作日", weekly: "每周", monthly: "每月", custom: "自定义 Cron",
+};
 
-/** Wall-clock parts of `date` in the scheduler timezone, independent of the host TZ. */
-function wallClock(date: Date): WallClock {
-  const parts: Record<string, string> = {};
-  for (const part of new Intl.DateTimeFormat("en-US", {
-    timeZone: SCHEDULE_TIME_ZONE,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hourCycle: "h23",
-  }).formatToParts(date)) {
-    if (part.type !== "literal") parts[part.type] = part.value;
-  }
-  return {
-    year: Number(parts.year),
-    month: Number(parts.month),
-    day: Number(parts.day),
-    hour: Number(parts.hour),
-    minute: Number(parts.minute),
-    second: Number(parts.second),
-  };
-}
+const wallFormatter = new Intl.DateTimeFormat("sv-SE", {
+  timeZone: SCHEDULE_TIME_ZONE, year: "numeric", month: "2-digit", day: "2-digit",
+  hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+});
 
-const pad = (value: number): string => String(value).padStart(2, "0");
-
-/** `datetime-local` value ("YYYY-MM-DDTHH:mm") for the scheduler timezone. */
+/** HTML/Calendar wall-clock value, always in the scheduler's timezone. */
 export function localInputValue(date = new Date()): string {
-  const { year, month, day, hour, minute } = wallClock(date);
-  return `${year}-${pad(month)}-${pad(day)}T${pad(hour)}:${pad(minute)}`;
+  return wallFormatter.format(date).replace(" ", "T");
 }
 
-/** `date` input value ("YYYY-MM-DD") for the scheduler timezone. */
 export function localDateValue(date = new Date()): string {
-  const { year, month, day } = wallClock(date);
-  return `${year}-${pad(month)}-${pad(day)}`;
+  return localInputValue(date).slice(0, 10);
 }
 
-/** Minutes the scheduler timezone is ahead of UTC at the given instant. */
-function zoneOffsetMinutes(instant: Date): number {
-  const { year, month, day, hour, minute, second } = wallClock(instant);
-  return Math.round((Date.UTC(year, month - 1, day, hour, minute, second) - instant.getTime()) / 60_000);
-}
-
-function offsetSuffix(minutes: number): string {
-  const sign = minutes < 0 ? "-" : "+";
-  const abs = Math.abs(minutes);
-  return `${sign}${pad(Math.floor(abs / 60))}:${pad(abs % 60)}`;
-}
-
-/** Turn a scheduler-timezone wall clock ("YYYY-MM-DDTHH:mm") into an ISO string carrying that zone's offset. */
+/** Shanghai has no DST in the supported scheduling range. */
 export function toOffsetDateTime(value: string): string {
-  const [datePart, timePart = "00:00"] = value.split("T");
-  const [year, month, day] = datePart.split("-").map(Number);
-  const [hour, minute] = timePart.split(":").map(Number);
-  const wallClockUtc = Date.UTC(year, month - 1, day, hour, minute);
-  // Resolve the offset at the wall-clock instant itself (Asia/Shanghai has no DST,
-  // the second pass only matters for zones that do observe it).
-  const firstGuess = zoneOffsetMinutes(new Date(wallClockUtc));
-  const offset = zoneOffsetMinutes(new Date(wallClockUtc - firstGuess * 60_000));
-  return `${value}:00${offsetSuffix(offset)}`;
+  return `${value}:00+08:00`;
 }
 
-export function formatTime(value: string | null): string {
-  if (!value) return "—";
-  const withYear = new Intl.DateTimeFormat("zh-CN", { timeZone: SCHEDULE_TIME_ZONE, year: "numeric" });
-  const targetYear = withYear.format(new Date(value));
-  const currentYear = withYear.format(new Date());
+/** Generate preset cron without shipping the scheduler library to the browser. */
+export function clientPresetCron(preset: RecurrencePreset, startsAt: string): string {
+  const [date, time] = startsAt.split("T");
+  if (!date || !time) return "";
+  const [hour, minute] = time.split(":").map(Number);
+  const day = Number(date.slice(8, 10));
+  const weekday = new Date(`${date}T00:00:00Z`).getUTCDay();
+  if (preset === "daily") return `${minute} ${hour} * * *`;
+  if (preset === "weekdays") return `${minute} ${hour} * * 1-5`;
+  if (preset === "weekly") return `${minute} ${hour} * * ${weekday}`;
+  if (preset === "monthly") return `${minute} ${hour} ${day} * *`;
+  return "";
+}
+
+export function formatTime(value: string | null, options?: Intl.DateTimeFormatOptions): string {
+  if (!value) return "暂无安排";
   return new Intl.DateTimeFormat("zh-CN", {
-    timeZone: SCHEDULE_TIME_ZONE,
-    ...(targetYear !== currentYear ? { year: "numeric" as const } : {}),
-    month: "numeric",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
+    timeZone: SCHEDULE_TIME_ZONE, month: "long", day: "numeric", hour: "2-digit", minute: "2-digit", ...options,
   }).format(new Date(value));
 }
 
+export function clockTime(value: string): string {
+  return new Intl.DateTimeFormat("zh-CN", { timeZone: SCHEDULE_TIME_ZONE, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(value));
+}
+
+export function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : "操作未完成，请重试";
+}
+
+export class ApiError extends Error {
+  constructor(message: string, readonly status: number) { super(message); }
+}
+
+/** Same-origin session API; a 401 returns the entire workspace to the access gate. */
 export async function api<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, { ...init, headers: { "content-type": "application/json", ...init?.headers } });
-  const data = (await response.json().catch(() => ({}))) as T & { error?: string };
-  if (!response.ok) throw new Error(data.error || "请求失败");
+  const response = await fetch(url, {
+    ...init, cache: "no-store", credentials: "same-origin",
+    headers: { "content-type": "application/json", ...init?.headers },
+  });
+  const data = await response.json().catch(() => ({})) as T & { error?: string };
+  if (!response.ok) {
+    if (response.status === 401 && url !== "/api/session" && typeof window !== "undefined") {
+      window.dispatchEvent(new Event("barker:unauthorized"));
+    }
+    throw new ApiError(data.error || `请求失败 (${response.status})`, response.status);
+  }
   return data;
 }

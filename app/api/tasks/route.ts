@@ -28,7 +28,7 @@ export async function GET(request: Request): Promise<NextResponse> {
   const pageSize = Math.min(50, requestedPageSize);
   const status = url.searchParams.get("status");
   const q = url.searchParams.get("q") ?? undefined;
-  if (status && !new Set(["active", "paused", "completed"]).has(status)) return jsonError("无效的状态筛选", 400);
+  if (status && !new Set(["active", "paused", "completed", "archived"]).has(status)) return jsonError("无效的状态筛选", 400);
   const { tasks, total } = listTasksPaginated({
     page,
     pageSize,

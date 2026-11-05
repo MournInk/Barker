@@ -23,12 +23,12 @@ export const taskInputSchema = z
       .refine((value) => !CONTROL_CHARS.test(value), "任务名称不能包含控制字符"),
     description: z
       .string()
-      .max(500, "解释最多 500 个字符")
-      .refine((value) => !CONTROL_CHARS.test(value), "解释不能包含控制字符")
+      .max(2000, "提醒内容最多 2000 个字符")
+      .refine((value) => !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(value), "提醒内容不能包含控制字符")
       .optional()
       .default(""),
     startsAt: isoDateTime,
-    preset: z.enum(["daily", "weekly", "monthly", "custom"]),
+    preset: z.enum(["daily", "weekdays", "weekly", "monthly", "custom"]),
     cron: z.string().trim().min(9, "请输入有效的 cron 表达式").max(80),
     repeatCount: z.number().int().positive("重复次数必须为正整数").max(100_000, "重复次数过大").nullable().optional(),
     endDate: z.string().date().nullable().optional(),

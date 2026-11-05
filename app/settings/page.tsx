@@ -1,248 +1,55 @@
 "use client";
 
-import { Check, Send } from "lucide-react";
-import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { Gate } from "@/components/gate";
-import { Shell } from "@/components/nav";
-import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import { Button, Card, Chip } from "@heroui/react";
+import { useState, type FormEvent } from "react";
+import { Glyph } from "@/components/icons";
+import { Field, Notice } from "@/components/primitives";
+import { useResource } from "@/components/use-resource";
+import { useWorkspace } from "@/components/workspace-context";
 import type { BarkSettings } from "@/lib/types";
-import { api } from "@/lib/ui";
+import { api, errorMessage } from "@/lib/ui";
 
-type SettingsPayload = {
-  settings: Omit<BarkSettings, "deviceKey">;
-  deviceKeyConfigured: boolean;
-  dataDir: string;
-};
-
-type SettingsPageData = { authenticated: boolean; payload: SettingsPayload | null };
-
-async function fetchSettingsPage(): Promise<SettingsPageData> {
-  const session = await api<{ authenticated: boolean }>("/api/session");
-  if (!session.authenticated) return { authenticated: false, payload: null };
-  return { authenticated: true, payload: await api<SettingsPayload>("/api/settings") };
-}
+type SettingsPayload = { settings: Omit<BarkSettings, "deviceKey">; deviceKeyConfigured: boolean; dataDir: string };
 
 export default function SettingsPage() {
-  const [authed, setAuthed] = useState<boolean | null>(null);
-  const [settings, setSettings] = useState<BarkSettings>({
-    endpoint: "https://api.day.app",
-    deviceKey: "",
-    title: "Barker 提醒",
-    sound: "1107",
-    group: "Barker",
-    icon: "",
-  });
-  const [configured, setConfigured] = useState(false);
-  const [dataDir, setDataDir] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState("");
-  const [error, setError] = useState("");
+  const { data, error, refresh } = useResource<SettingsPayload>("/api/settings", 0);
+  return <div className="page-stack"><div className="page-heading"><div><p className="eyebrow">连接设备，让提醒抵达</p><h1>推送设置<span className="heading-period">。</span></h1><p>你的 Bark，你的节奏。只需连接一次，之后交给 Barker。</p></div><Chip variant="soft" color={data?.deviceKeyConfigured ? "success" : "default"}><span className={`status-dot ${data?.deviceKeyConfigured ? "live" : ""}`} /><Chip.Label>{data?.deviceKeyConfigured ? "设备已配置" : "等待连接"}</Chip.Label></Chip></div>{error && <Notice>{error}<Button size="sm" variant="ghost" onPress={() => void refresh()}>重试</Button></Notice>}{data ? <SettingsForm initial={data} onSaved={refresh} /> : <div className="loading-state">正在读取你的配置…</div>}</div>;
+}
 
-  const apply = useCallback((page: SettingsPageData) => {
-    const payload = page.payload;
-    setAuthed(page.authenticated);
-    if (!payload) return;
-    setSettings((cur) => ({ ...cur, ...payload.settings, deviceKey: "" }));
-    setConfigured(payload.deviceKeyConfigured);
-    setDataDir(payload.dataDir);
-  }, []);
-
-  const load = useCallback(async () => { apply(await fetchSettingsPage()); }, [apply]);
-
-  useEffect(() => {
-    let alive = true;
-    void fetchSettingsPage().then(
-      (page) => { if (alive) apply(page); },
-      (err: unknown) => { if (alive) setError(err instanceof Error ? err.message : "无法加载"); },
-    );
-    return () => { alive = false; };
-  }, [apply]);
-
-  async function save(e: FormEvent) {
-    e.preventDefault();
-    setBusy(true); setError(""); setMessage("");
+function SettingsForm({ initial, onSaved }: { initial: SettingsPayload; onSaved: () => Promise<void> }) {
+  const { refresh, notify } = useWorkspace();
+  const [settings, setSettings] = useState<BarkSettings>({ ...initial.settings, deviceKey: "" });
+  const [saved, setSaved] = useState<BarkSettings>({ ...initial.settings, deviceKey: "" });
+  const [configured, setConfigured] = useState(initial.deviceKeyConfigured);
+  const [busy, setBusy] = useState<"save" | "test" | null>(null);
+  const [feedback, setFeedback] = useState<{ message: string; kind: "error" | "success" } | null>(null);
+  const dirty = JSON.stringify(saved) !== JSON.stringify(settings);
+  function update(key: keyof BarkSettings, value: string) { setSettings((previous) => ({ ...previous, [key]: value })); setFeedback(null); }
+  async function save(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); setBusy("save"); setFeedback(null);
     try {
       await api("/api/settings", { method: "PUT", body: JSON.stringify(settings) });
-      setSettings((cur) => ({ ...cur, deviceKey: "" }));
-      setMessage("Bark 配置已保存");
-      await load();
-    } catch (err) { setError(err instanceof Error ? err.message : "保存失败"); }
-    finally { setBusy(false); }
+      const next = { ...settings, deviceKey: "" };
+      setConfigured(configured || Boolean(settings.deviceKey.trim())); setSettings(next); setSaved(next);
+      setFeedback({ message: "设置已保存。队列中的提醒将使用新配置继续尝试。", kind: "success" }); await Promise.all([refresh(), onSaved()]);
+    } catch (error) { setFeedback({ message: errorMessage(error), kind: "error" }); }
+    finally { setBusy(null); }
   }
-
   async function test() {
-    setBusy(true); setError(""); setMessage("");
-    try { await api("/api/settings/test", { method: "POST", body: "{}" }); setMessage("测试推送已发出，请查看 Bark"); }
-    catch (err) { setError(err instanceof Error ? err.message : "测试失败"); }
-    finally { setBusy(false); }
+    setBusy("test"); setFeedback(null);
+    try { await api("/api/settings/test", { method: "POST", body: "{}" }); setFeedback({ message: "Bark 已确认接收测试通知，请查看你的设备。", kind: "success" }); notify("测试通知已送达 Bark。"); }
+    catch (error) { setFeedback({ message: errorMessage(error), kind: "error" }); }
+    finally { setBusy(null); }
   }
-
-  if (authed === null) {
-    return (
-      <div className="grid min-h-[60vh] place-items-center px-4">
-        <p className="text-sm text-muted-foreground">正在确认访问权限…</p>
-      </div>
-    );
-  }
-  if (!authed) return <Gate onAuthed={() => void load()} />;
-
-  const sqlitePath = dataDir ? `${dataDir.replace(/\/+$/, "")}/barker.sqlite` : "—";
-
-  return (
-    <Shell>
-      <div className="space-y-6">
-        <div className="space-y-1.5">
-          <div className="flex flex-wrap items-center gap-2">
-            <h1 className="text-xl font-semibold tracking-tight">设置</h1>
-            <Badge variant={configured ? "success" : "secondary"}>
-              {configured ? "已配置" : "未配置"}
-            </Badge>
-          </div>
-          <p className="text-sm text-muted-foreground">配置自建 Bark API。Device Key 留空表示保持不变。</p>
-        </div>
-
-        {message && (
-          <Alert>
-            <AlertDescription>{message}</AlertDescription>
-          </Alert>
-        )}
-        {error && (
-          <Alert variant="destructive">
-            <AlertDescription>{error}</AlertDescription>
-          </Alert>
-        )}
-
-        <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
-          <form onSubmit={save}>
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-base">Bark</CardTitle>
-                <CardDescription>推送到自建 Bark API。Device Key 仅保存在服务端，不会回显。</CardDescription>
-              </CardHeader>
-              <CardContent className="grid gap-4">
-                <div className="grid gap-1.5">
-                  <Label htmlFor="endpoint">API 地址</Label>
-                  <Input
-                    id="endpoint"
-                    value={settings.endpoint}
-                    onChange={(e) => setSettings({ ...settings, endpoint: e.target.value })}
-                    required
-                    placeholder="https://api.day.app"
-                  />
-                </div>
-                <div className="grid gap-1.5">
-                  <Label htmlFor="deviceKey">Device Key</Label>
-                  <Input
-                    id="deviceKey"
-                    type="password"
-                    value={settings.deviceKey}
-                    placeholder={configured ? "••••••••（留空保持不变）" : "粘贴 Bark Device Key"}
-                    onChange={(e) => setSettings({ ...settings, deviceKey: e.target.value })}
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    {configured ? "已保存 Device Key；留空提交则保持不变。" : "尚未保存 Device Key，保存后才能测试推送。"}
-                  </p>
-                </div>
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <div className="grid gap-1.5">
-                    <Label htmlFor="title">默认标题</Label>
-                    <Input
-                      id="title"
-                      value={settings.title}
-                      onChange={(e) => setSettings({ ...settings, title: e.target.value })}
-                      required
-                    />
-                  </div>
-                  <div className="grid gap-1.5">
-                    <Label htmlFor="sound">提示音</Label>
-                    <Input
-                      id="sound"
-                      value={settings.sound}
-                      onChange={(e) => setSettings({ ...settings, sound: e.target.value })}
-                      placeholder="如：1107"
-                    />
-                  </div>
-                </div>
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <div className="grid gap-1.5">
-                    <Label htmlFor="group">分组</Label>
-                    <Input
-                      id="group"
-                      value={settings.group}
-                      onChange={(e) => setSettings({ ...settings, group: e.target.value })}
-                      placeholder="Barker"
-                    />
-                  </div>
-                  <div className="grid gap-1.5">
-                    <Label htmlFor="icon">图标 URL</Label>
-                    <Input
-                      id="icon"
-                      value={settings.icon}
-                      onChange={(e) => setSettings({ ...settings, icon: e.target.value })}
-                      placeholder="https://…（可空）"
-                    />
-                  </div>
-                </div>
-              </CardContent>
-              <CardFooter className="flex-wrap justify-end gap-2">
-                <p className="mr-auto text-xs text-muted-foreground">保存后可点“发送测试”验证推送链路是否通畅。</p>
-                <Button type="button" variant="outline" disabled={busy} onClick={() => void test()}>
-                  <Send /> 发送测试
-                </Button>
-                <Button type="submit" disabled={busy}>
-                  <Check /> 保存配置
-                </Button>
-              </CardFooter>
-            </Card>
-          </form>
-
-          <div className="space-y-4">
-            <Card>
-              <CardHeader>
-                <CardTitle>安全</CardTitle>
-                <CardDescription>代理与会话</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-2 text-sm leading-6 text-muted-foreground">
-                <p>
-                  直连公网时不要启用 <code className="font-mono text-foreground">BARKER_TRUST_PROXY</code>
-                  ，否则客户端可伪造 <code className="font-mono text-foreground">X-Forwarded-*</code> 绕过限流。
-                </p>
-                <p>
-                  会话为 <code className="font-mono text-foreground">HttpOnly + SameSite=Lax</code>，有效期 12 小时。
-                </p>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <CardTitle>数据</CardTitle>
-                <CardDescription>持久化</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-2 text-sm leading-6 text-muted-foreground">
-                <p>任务与推送队列持久化于（WAL）：</p>
-                <code className="block break-all rounded-md bg-muted px-2 py-1.5 font-mono text-[11px] leading-5 text-foreground/80">
-                  {sqlitePath}
-                </code>
-                <p>
-                  备份时一并拷贝 <code className="font-mono text-foreground">.sqlite-wal/.sqlite-shm</code>。
-                </p>
-              </CardContent>
-            </Card>
-          </div>
-        </div>
-      </div>
-    </Shell>
-  );
+  return <div className="settings-grid"><div className="settings-main"><form onSubmit={save}><Card className="settings-card"><div className="section-top"><div className="settings-section-title"><span className="settings-symbol"><Glyph name="link" size={23} /></span><div><h2>连接 Bark</h2><p>让重要的提醒，直达你的设备。</p></div></div><Chip variant="soft" size="sm">Bark API</Chip></div>
+    <div className="settings-fields"><Field label="API 服务地址" value={settings.endpoint} onChange={(event) => update("endpoint", event.target.value)} placeholder="https://api.day.app" type="url" required maxLength={300} hint="使用 Bark 官方服务，或填写自建服务器地址。无需添加 /push。" /><Field label="Device Key" value={settings.deviceKey} onChange={(event) => update("deviceKey", event.target.value)} placeholder={configured ? "已安全保存，留空保持不变" : "粘贴你的 Bark Device Key"} type="password" autoComplete="new-password" maxLength={300} hint={configured ? "密钥仅保存在服务端，不会在页面回显。" : "打开 Bark，设备链接中服务地址后的那段字符就是 Device Key。"} />
+      <details className="advanced-settings"><summary>更多通知选项<Glyph name="chevronDown" size={15} /></summary><div className="advanced-fields"><div className="form-grid"><Field label="通知分组" value={settings.group} onChange={(event) => update("group", event.target.value)} maxLength={100} placeholder="Barker" /><Field label="提示音" value={settings.sound} onChange={(event) => update("sound", event.target.value)} maxLength={80} placeholder="1107" /></div><Field label="通知图标 URL" value={settings.icon} onChange={(event) => update("icon", event.target.value)} placeholder="https://example.com/icon.png（可选）" type="url" maxLength={300} hint="留空时使用 Bark 默认图标。" /></div></details>
+      {feedback && <Notice kind={feedback.kind}>{feedback.message}</Notice>}
+    </div><div className="settings-actions"><span>{dirty ? "有尚未保存的修改" : "修改配置后，记得保存"}</span><Button variant="ghost" isDisabled={!dirty || busy !== null} onPress={() => { setSettings({ ...saved }); setFeedback(null); }}>取消修改</Button><Button type="submit" isPending={busy === "save"} isDisabled={!dirty || busy === "test"}>保存设置</Button></div>
+  </Card></form><Card className="test-card"><span className="settings-symbol"><Glyph name="send" size={22} /></span><div><h2>试着打个招呼</h2><p>{dirty ? "请先保存修改，再发送一条测试通知。" : "发送一条测试通知，确认 Barker 和你的设备已连接。"}</p></div><Button variant="outline" onPress={() => void test()} isPending={busy === "test"} isDisabled={!configured || dirty || busy === "save"}>发送测试</Button></Card>
+    <div className="page-note"><Glyph name="lock" size={16} /><p>Device Key 仅用于向你配置的 Bark API 发起推送，不会暴露给浏览器。</p></div>
+  </div><aside className="settings-aside"><Card className="notification-preview"><div className="section-top"><h2>通知预览</h2><span className="mini-label">示意</span></div><div className="phone-preview"><span className="phone-island" /><span className="phone-time">09:41</span><span className="phone-date">每一个值得记住的日子</span><div className="mock-notification"><div><span className="mock-bark"><Glyph name="bell" size={14} /></span><span>Bark</span><small>现在</small></div><h3>给未来的自己</h3><p>停一停，喝杯水。<br />也别忘了为今天的努力鼓掌。</p></div><span className="phone-home" /></div><p className="preview-caption">提醒名称作为标题，提醒内容作为正文。</p></Card>
+    <section className="settings-help"><h2>第一次使用？</h2><ol><li><span>1</span><p>在 iPhone 上打开 Bark 应用。</p></li><li><span>2</span><p>复制设备链接，将服务地址与 Device Key 填入左侧。</p></li><li><span>3</span><p>保存设置，发送测试通知。一切就绪。</p></li></ol><a href="https://bark.day.app" target="_blank" rel="noreferrer" className="text-action">了解 Bark<Glyph name="arrow" size={15} /></a></section>
+    <section className="storage-note"><Glyph name="shield" size={18} /><div><h3>数据在你手中</h3><p>任务、投递队列与配置保存在本机 SQLite 数据库。备份请使用一致性数据库快照，或停止服务后复制整个数据目录。</p><code>{initial.dataDir}/barker.sqlite</code></div></section>
+  </aside></div>;
 }

@@ -1,0 +1,81 @@
+name: ci
+
+on:
+  push:
+    branches: [main, "codex/**"]
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, edited]
+  merge_group:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      NEXT_TELEMETRY_DISABLED: "1"
+      TZ: Asia/Shanghai
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Select affected checks
+        id: scope
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+          HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          EVENT: ${{ github.event_name }}
+        run: node scripts/ci-scope.mjs "$BASE" "$HEAD" "$EVENT"
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        if: steps.scope.outputs.source == 'true' || steps.scope.outputs.container == 'true' || steps.scope.outputs.tests != '[]'
+        with:
+          node-version: "24.22.2"
+
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        if: steps.scope.outputs.source == 'true' || steps.scope.outputs.container == 'true' || steps.scope.outputs.tests != '[]'
+
+      - name: Install locked dependencies
+        if: steps.scope.outputs.source == 'true' || steps.scope.outputs.container == 'true' || steps.scope.outputs.tests != '[]'
+        run: pnpm install --frozen-lockfile
+
+      - name: Test affected modules
+        if: steps.scope.outputs.tests != '[]'
+        env:
+          TESTS: ${{ steps.scope.outputs.tests }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { spawnSync } from 'node:child_process';
+          const result = spawnSync(process.execPath, ['--import', 'tsx', '--test', ...JSON.parse(process.env.TESTS)], { stdio: 'inherit' });
+          process.exit(result.status ?? 1);
+          NODE
+
+      - name: Check application contracts
+        if: steps.scope.outputs.source == 'true'
+        run: |
+          pnpm exec next typegen
+          pnpm typecheck
+          pnpm lint
+          BARKER_DATA_DIR="$(mktemp -d)" BARKER_DISABLE_SCHEDULER=1 pnpm build
+
+      - name: Check container startup and durable retry
+        if: steps.scope.outputs.container == 'true'
+        run: |
+          docker build -t barker:local .
+          pnpm test:container
+
+      - name: Verify applicable checks completed
+        if: always()
+        env:
+          STATUS: ${{ job.status }}
+          SCOPE: ${{ steps.scope.outcome }}
+        run: test "$STATUS" = success && test "$SCOPE" = success

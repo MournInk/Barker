@@ -6,12 +6,13 @@ const AUTH_COOKIE = "barker_session";
 const SESSION_DURATION_SECONDS = 12 * 60 * 60;
 /** A shorter secret is guessable enough to forge session cookies / log in. */
 const MIN_SECRET_LENGTH = 16;
-const dataDir = resolve(process.env.BARKER_DATA_DIR || "./data");
+// Runtime volumes and secrets are not build assets and must never be traced.
+const dataDir = resolve(/* turbopackIgnore: true */ process.env.BARKER_DATA_DIR || "./data");
 mkdirSync(dataDir, { recursive: true, mode: 0o700 });
 
 function readSecretFile(path: string): string {
   try {
-    return readFileSync(path, "utf8").trim();
+    return readFileSync(/* turbopackIgnore: true */ path, "utf8").trim();
   } catch {
     return "";
   }
@@ -26,10 +27,10 @@ function loadOrCreateSecret(name: string, configuredValue?: string): string {
     return configured;
   }
 
-  const path = join(dataDir, name);
+  const path = join(/* turbopackIgnore: true */ dataDir, name);
   const existing = readSecretFile(path);
   if (existing.length >= MIN_SECRET_LENGTH) return existing;
-  if (existsSync(path)) {
+  if (existsSync(/* turbopackIgnore: true */ path)) {
     // Fail fast instead of silently accepting an empty/truncated secret (an empty
     // session secret lets anyone forge a valid cookie, an empty password lets
     // anyone log in). A crash during first write is the realistic cause.

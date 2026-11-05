@@ -1,8 +1,7 @@
-# syntax=docker/dockerfile:1.7
 # Barker - Next.js standalone production image
 # Requires Node >=24 (built-in node:sqlite)
 
-FROM node:24-alpine AS base
+FROM node:24.22.2-alpine@sha256:8a32c8cf649a49915a66e81e7a609223c708d0adabf288ee3f4077d765542f85 AS base
 
 # Corepack ships with Node 24 and installs the pnpm version pinned by
 # `packageManager` in package.json. Enabling it in the shared base stage makes
@@ -20,13 +19,13 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile
 
 # --- builder: compile Next.js standalone output ---
-FROM base AS builder
-WORKDIR /app
-COPY --from=deps /app/node_modules ./node_modules
+FROM deps AS builder
 COPY . .
 ENV NEXT_TELEMETRY_DISABLED=1
 # Ensure `public` exists so the runner stage COPY never fails when no static assets are present
-RUN mkdir -p public && pnpm run build
+RUN mkdir -p public \
+ && BARKER_DATA_DIR=/tmp/barker-build BARKER_DISABLE_SCHEDULER=1 pnpm run build \
+ && rm -rf /tmp/barker-build
 
 # --- runner: minimal production runtime ---
 FROM base AS runner
@@ -53,6 +52,6 @@ USER nextjs
 EXPOSE 3000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||3000)+'/api/session').then(r=>{process.exit(r.ok?0:1)}).catch(()=>process.exit(1))"
+  CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||3000)+'/api/health').then(r=>{process.exit(r.ok?0:1)}).catch(()=>process.exit(1))"
 
 CMD ["node", "server.js"]

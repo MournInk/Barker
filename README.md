@@ -1,221 +1,171 @@
 # Barker
 
-前后端一体的 Next.js 定时提醒小工具 —— 按 cron 周期将提醒可靠推送到你自己的 [Bark](https://bark.day.app) API。
+一个私有部署的提醒工作空间。用一次安排，把工作与生活中的重要时刻交给 Bark。
 
-> 运行时生成访问密码 · 墙钟 cron（`Asia/Shanghai`）· 每条到点提醒落库为 delivery · 失败指数退避无限重试绝不丢弃 · SQLite WAL 持久化
+Next.js App Router + React 19 + HeroUI React V3 + SQLite。唯一包管理器为 pnpm，Node.js 需要 24 或更高版本。
 
-Author: **MournInk** · Version: **0.4.2** · Node `>=24` · pnpm `>=12`（唯一包管理器）
+## 工作流程
 
----
+1. 启动服务，从终端或容器日志取得访问密码，进入工作空间。
+2. 在「推送设置」填写 Bark 服务地址与 Device Key，保存后发送测试通知。
+3. 创建提醒：名称、可选正文、开始时间、重复周期，以及重复次数或截止日期。
+4. 在「工作概览」查看统计和未来七天的安排，在「所有提醒」编辑、暂停、恢复、复制或归档。
+5. 在「投递记录」检查每条消息的状态、尝试次数、错误与下次重试时间；需要时可提前重试。
 
-## 功能
+所有列表、统计和排期均使用实际服务端数据；没有内置演示任务。配置未完成时，也可以先创建提醒，到期消息会保留在队列中。
 
-- **运行时密码授权**：未配置 `BARKER_PASSWORD` 时启动在日志打印随机密码（`🔐 Barker access password: ...`），登录后签发 `HttpOnly + SameSite=Lax` 12 小时会话；同客户端连续输错 5 次锁定 10 分钟；支持 `BARKER_TRUST_PROXY` 受控信任反代头。
-- **任务管理**：名称、解释（可空）、开始时间、周期预设（每天 / 每周 / 每月，按 `Asia/Shanghai` 墙钟生成 cron）或自定义五段 cron；结束条件二选一：重复次数或截止日期。
-- **可靠推送**：每个到点时刻写入 `deliveries`，`claim → sending (2 min 租约) → pending/sent` 状态机（租约带 token，过期 worker 的迟到回写会被拒绝，避免重复推送）；失败按 5s、10s、20s… 逐次翻倍退避（上限 1h）**无限重试**，服务重启自动续传，暂停 / 恢复 / 编辑会补排所有错过的 occurrence；遇到永久性拒绝（错误的 Device Key、Bark 应用被删、404 等）连续 5 次后自动暂停任务，避免空转打爆接口。
-- **Bark 自配置**：`endpoint / deviceKey / title / sound / group / icon`，`deviceKey` 留空保持不变，一键发送测试推送。
-- **简约扁平界面**：Tailwind CSS 4 + shadcn/ui 组件层（zinc 中性色、1px 描边、无阴影 / 渐变）；顶部导航 + 居中内容区，`/` 概览 · `/tasks` 任务列表（8 条/页分页、状态与关键词筛选、弹窗式新建/编辑）· `/settings` 配置页；320px 起自适应，5s 轮询与服务端调度器保持一致。
+### 排期规则
 
----
+- 时区固定为 `Asia/Shanghai`（北京时间），不随浏览器或宿主机时区改变。
+- 预设包括每天、工作日、每周、每月，也支持五段 cron：`分 时 日 月 周`。
+- 开始时间是允许执行的最早分钟，不是无条件立即推送。创建时已过去的排期不会补发。
+- 每月预设沿用相同日历日；29–31 日在不存在该日期的月份跳过。
+- 次数指总排期次数，包含已入队但尚未成功的消息。失败重试不额外消耗次数。
+- 截止日期包含当天；「排期结束」不等于所有消息已送达，剩余队列仍会继续投递。
+- 服务停机期间、处于进行中状态的任务会在重启后补排。明确暂停的时间段不补发。
+- 编辑、暂停或归档之前，会先保存操作时已经到期的提醒。编辑不会改写旧消息的标题和正文。
+- 归档停止未来排期，不删除任何投递记录或待发送消息。历史任务可以复制为新提醒，没有强制丢弃入口。
 
-## 快速开始 — Docker（推荐）
+### 可靠投递的边界
 
-> 镜像基于 `node:24-alpine` + Next.js `output: standalone`，数据持久化到 `/app/data`（`barker.sqlite` WAL）。
+每个到期时刻先以唯一的 `(task_id, occurrence_at)` 写入 SQLite outbox，再发送 HTTP 请求：
 
-### 方式 A：Docker Compose
-
-```bash
-git clone https://github.com/MournInk/Barker.git
-cd Barker
-
-# 可选：固定密码，避免每次查看日志
-# echo "BARKER_PASSWORD=your-secret" >> .env
-
-docker compose up -d --build
-docker logs -f barker   # 未设 BARKER_PASSWORD 时在此查看随机密码
-# 打开 http://localhost:3000 输入密码登录
+```text
+pending -> sending（2 分钟租约）-> sent
+              |                   ^
+              +-> pending -> 重试-+
 ```
 
-`docker-compose.yml` 已配置命名卷 `barker-data:/app/data`，升级时数据不丢失。
+- 网络错误、超时、HTTP 错误、无效响应、错误 Device Key 等均保留消息，持续重试，不设失败次数上限，也不会自动暂停未来排期。
+- 退避从 5 秒开始翻倍，上限 1 小时。只有收到 HTTP 成功且 JSON `code: 200` 的确认后才记为送达。
+- 修改 Bark 配置会提前唤醒等待中的消息；修正错误配置后无需逐条恢复。
+- 发送中的消息由租约保护；进程异常退出后，租约到期会重新领取。迟到的旧 worker 无权覆盖新租约。
+- 调度器每 2 秒检查到期提醒；每轮补排最多 500 个时刻，发送最多 20 条。慢网络不阻止后续到期消息入队。
+- 超过 500 条未补排积压时，编辑/暂停/归档会原子拒绝，让调度器分批补排后再操作，不截断或丢弃积压。
 
-### 方式 B：docker run
+**这是至少一次投递，不是恰好一次。** Bark 已收到请求但确认包丢失、或进程在确认落库前退出时，重试可能产生重复通知。「已送达」表示 Bark API 已确认接收，不代表 iPhone 已显示通知。服务可用性、磁盘空间与持久化数据安全仍需由部署者保障。
+
+## Docker 本地运行
 
 ```bash
-docker build -t barker:0.4.2 .
+cp .env.example .env
+# 可选：在 .env 设置至少 16 字符的 BARKER_PASSWORD
 
-# 命名卷
-docker run -d --name barker -p 3000:3000 \
+docker compose up -d --build
+docker compose logs -f barker
+# 访问 http://localhost:3000
+```
+
+Compose 从当前代码构建 `barker:local`，不是已发布的新版本。默认只绑定 `127.0.0.1`；需要跨设备访问时，可设置 `BARKER_BIND_ADDR`，并建议置于 HTTPS 反向代理后。`.env` 中的访问密码等配置会在运行时传入容器，不进入镜像。
+
+也可以直接使用命名卷：
+
+```bash
+docker build -t barker:local .
+docker run -d --init --name barker \
+  -p 127.0.0.1:3000:3000 \
   -v barker-data:/app/data \
-  barker:0.4.2
-
-# 或绑定宿主机目录
-mkdir -p ./data
-docker run -d --name barker -p 3000:3000 \
-  -v "$PWD/data:/app/data" \
-  -e BARKER_PASSWORD=change-me \
-  barker:0.4.2
-
+  barker:local
 docker logs barker
 ```
 
-### 从源码构建镜像说明
+镜像基于固定版本与摘要的 Node 24 Alpine，多阶段构建 Next.js standalone，使用 UID/GID `1001:1001` 非 root 用户运行。健康检查访问 `/api/health` 并读取数据库。若使用绑定目录而非命名卷，需要确保该用户有写入权限。
 
-`Dockerfile` 为三阶段构建：`deps → builder (pnpm run build) → runner`，`runner` 仅含 `.next/standalone` + `.next/static`，以 `nextjs` 非 root 用户运行，`HEALTHCHECK` 每 30s 探测 `GET /api/session`。
+构建会排除运行时数据与本地环境文件，并检查 standalone 产物中没有数据库、WAL 或密钥，避免把开发环境状态打进镜像。
 
-镜像标签：正式版本由 CI 推送到 `ghcr.io/mournink/barker`（`0.4.2` / `0.4` / `latest`）；本地构建用 `docker build -t barker:0.4.2 .`。`deps` 阶段会把 `package.json`、`pnpm-lock.yaml`、`pnpm-workspace.yaml` 一起拷入，确保 `pnpm install --frozen-lockfile` 能按 `allowBuilds` 放行原生构建脚本。
+停止与更新：
 
----
+```bash
+docker compose stop                   # 保留数据
+# 更新代码后
+docker compose up -d --build
+```
+
+不要使用 `docker compose down -v`，除非确实希望删除任务、队列、配置与密钥。
 
 ## 环境变量
 
-| 变量 | 必填 | 默认 | 说明 |
-|---|---|---|---|
-| `BARKER_PASSWORD` | 否 | 随机生成并打印到日志 | 访问密码。留空则每次启动生成新密码 |
-| `BARKER_SESSION_SECRET` | 否 | 写入 `data/session-secret.txt` | 会话签名密钥，首次生成后持久化 |
-| `BARKER_DATA_DIR` | 否 | `./data`（容器内 `/app/data`） | SQLite 与密钥文件目录 |
-| `BARKER_TRUST_PROXY` | 否 | 空（不信任） | 设为 `1/true/yes` 时才信任 `X-Forwarded-* / X-Real-IP` 用于限流与 `Secure` 判定；直连公网时切勿开启 |
-| `BARKER_COOKIE_SECURE` | 否 | 空 | 设为 `1/true/yes` 时强制会话 Cookie 带 `Secure`（TLS 在 Barker 之外终止、又未开启 `BARKER_TRUST_PROXY` 时使用） |
-| `PORT` | 否 | `3000` | 监听端口 |
-| `HOSTNAME` | 否 | `0.0.0.0` | 监听地址 |
-| `TZ` | 否 | `Asia/Shanghai` | 容器与调度时区，`Dockerfile`/`compose` 已设为上海时区 |
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `BARKER_PASSWORD` | 自动生成 | 至少 16 字符；未设置时首次生成并写入数据目录，后续启动复用、在日志打印 |
+| `BARKER_SESSION_SECRET` | 自动生成并持久化 | 至少 16 字符，用于 HMAC 会话签名 |
+| `BARKER_DATA_DIR` | `./data`；容器 `/app/data` | SQLite 数据库与密钥文件目录 |
+| `BARKER_TRUST_PROXY` | 不信任 | 仅在可信反代后设置 `1/true/yes`，用于限流地址和 HTTPS Cookie 判定 |
+| `BARKER_COOKIE_SECURE` | 不强制 | `1/true/yes` 强制会话 Cookie 的 Secure 属性；不要在纯 HTTP 环境开启 |
+| `BARKER_BIND_ADDR` | `127.0.0.1` | 仅 Compose，宿主机绑定地址 |
+| `BARKER_PORT` | `3000` | 仅 Compose，宿主机端口 |
+| `PORT` | `3000` | standalone 服务的内部监听端口；开发时使用 `pnpm dev --port 3100` |
+| `HOSTNAME` | 容器 `0.0.0.0` | standalone 监听地址 |
 
-详见 [.env.example](.env.example)。
+`BARKER_DISABLE_SCHEDULER=1` 仅供隔离预览和构建验证使用，**正常运行不要设置**，否则不会自动投递。
 
----
+会话有效期为 12 小时，Cookie 使用 `HttpOnly + SameSite=Lax`。连续输错 5 次会锁定对应限流键 10 分钟；不信任反代头时，所有客户端共享该限流键。密钥文件过短或损坏会导致启动失败，需要先备份并人工处理，避免空密码或弱签名继续运行。
 
-## 数据
-
-- 默认 `./data/barker.sqlite`（WAL + `busy_timeout=10000`），`tasks / deliveries / settings` 全量持久化。
-- `instrumentation.ts` 启动调度器：每 2s 执行 `enqueueDueOccurrences + processOneDelivery(最多 20 条)`，空闲 `timer.unref()` 不阻止退出。
-- 任务删除前所有 `delivery` 必须为 `sent`，否则返回 `409` 并提示「请等发送成功后再删除」；积压 `>500` 条时操作会提示等待调度器补排而非丢弃。
-
-删除任务前所有 `delivery` 必须已 `sent`；若推送因永久性错误永远无法成功，删除确认框中会提供「强制删除」二次确认（`DELETE /api/tasks/:id?force=1`），显式丢弃该任务积压的提醒。
-
-备份：直接拷贝 `data/barker.sqlite*`（含 `-wal/-shm`）或快照命名卷。
-
----
-
-## 本地开发（不使用 Docker）
+## 本地开发与验证
 
 ```bash
-node -v                # >=24
-corepack enable        # 按 packageManager 字段启用 pnpm 12
-pnpm install           # 首次安装
+corepack enable
+pnpm install --frozen-lockfile
+pnpm dev
 
-pnpm dev               # http://localhost:3000
-pnpm build && pnpm start
-
-pnpm test              # node:test 单元测试（23 用例）
-pnpm typecheck         # tsc --noEmit
-pnpm lint              # eslint（eslint-config-next 16 原生 flat config）
+pnpm test
+pnpm exec next typegen
+pnpm typecheck
+pnpm lint
+pnpm build
+pnpm start
 ```
 
-> 包管理器统一为 pnpm：仓库只保留 `pnpm-lock.yaml`，不要把 npm/yarn 的锁文件带回来。
-> pnpm 12 默认禁止依赖执行安装脚本，仅 `esbuild` / `unrs-resolver` 在 `pnpm-workspace.yaml` 的 `allowBuilds` 中放行。
+测试使用临时数据目录，不使用现有的 `data/`。生产构建如需完全隔离本地数据，可以指定临时的 `BARKER_DATA_DIR` 并设置 `BARKER_DISABLE_SCHEDULER=1`；运行时不要沿用后者。
 
-启动日志：
-
-```
-🔐 Barker access password: xxxxx
-Set BARKER_PASSWORD to use your own password.
-```
-
----
-
-## 项目结构
-
-```
-app/                # Next.js App Router
-  page.tsx          # / 概览仪表盘
-  tasks/page.tsx    # /tasks 分页
-  settings/page.tsx # /settings 配置
-  api/overview|session|settings|tasks
-components/         # nav / gate / pagination / task-card
-  ui/               # shadcn/ui 基础组件（button / card / dialog / select…）
-lib/
-  db.ts             # SQLite + deliveries 状态机 + 事务补排
-  auth.ts           # 密码 / HMAC 会话 / 限流
-  cron.ts           # Asia/Shanghai 墙钟 cron（croner）
-  scheduler.ts      # enqueue + claim/lease + 指数退避
-  bark.ts           # Bark push 适配
-  validation.ts     # zod 校验
-  utils.ts          # cn() 类名合并（clsx + tailwind-merge）
-tests/              # node:test 用例
-postcss.config.mjs  # Tailwind CSS 4 PostCSS 插件
-components.json     # shadcn/ui 配置
-Dockerfile
-docker-compose.yml
-pnpm-workspace.yaml # pnpm 12 工作区设置（allowBuilds）
-.github/workflows/release.yml  # 打版本标签时校验并发布镜像
-```
-
----
-
-## 校验
+### 容器端到端冒烟
 
 ```bash
-pnpm test && pnpm typecheck && pnpm lint && pnpm build
+docker build -t barker:local .
+pnpm test:container
 ```
 
-CI 在推送 `v*` 版本标签时自动执行同一组校验，并构建多架构镜像推送到 GHCR，不必在本地复刻整条流水线。
+该脚本使用独立命名卷、随机本地端口和本地模拟 Bark，不会连接真实设备。它实际等待一个分钟级排期，验证：非 root 启动、随机密码、未授权拦截、配置密钥脱敏、HTTP 503 后保留、归档后继续投递、停止/重启后自动恢复、成功确认及健康检查。通常需要 1–2 分钟，结束时清理自己的容器与卷。
 
-Docker 冒烟：
+## 数据与升级
 
-```bash
-docker run -d --name barker-smoke -p 3001:3000 barker:0.4.2
-curl -i http://localhost:3001/api/session  # 200 {"authenticated":false}
-docker rm -f barker-smoke
+数据目录包含 `barker.sqlite`、SQLite 的 WAL/SHM 文件、`access-password.txt` 与 `session-secret.txt`。Device Key 存在服务端 SQLite 中，不会由设置接口回显；它**没有进行静态加密**，数据目录和备份均应按秘密材料保护。
+
+推荐备份步骤：
+
+1. 停止 Barker，确认没有其他进程写入同一数据库。
+2. 备份整个数据目录或命名卷，包含数据库和密钥文件。
+3. 启动 Barker。
+
+在线备份应使用 SQLite 一致性快照，不能在运行中分别复制数据库和 WAL 来代替一致性备份。不要在网络文件系统上共享 SQLite，也不建议启动多个实例共同挂载同一目录。此项目需要常驻 Node 进程和持久磁盘，不适合短生命周期 serverless 部署。
+
+本次重构对既有数据库做事务式增量迁移，不清空任务和投递历史。旧 delivery 没有历史消息快照，迁移时只能使用当时的任务内容补齐；此后新消息内容不可变。旧版本因永久错误自动暂停的任务仍保持暂停，需要手动恢复。建议更新前完成备份，升级后不要直接用旧代码写入新数据库。
+
+长期失败和历史记录不会自动删除，需监控磁盘空间；自动清理不能以丢弃未送达消息为代价。
+
+## 代码结构
+
+```text
+app/                       概览、提醒、投递、设置四个页面
+app/api/                   会话、任务、预览、投递/重试、设置、健康检查
+components/                认证入口、工作空间、导航、任务编辑器、HeroUI 组合组件
+lib/db.ts                  SQLite 迁移、outbox、租约、事务式任务操作
+lib/cron.ts                时区、cron 预设、编辑预览、七日安排
+lib/scheduler.ts           有界补排、发送、持续重试
+lib/bark.ts                Bark HTTP 协议、超时、显式成功确认
+lib/auth.ts                密码、签名 Cookie、限流
+lib/validation.ts          Zod 输入约束
+scripts/container-smoke.mjs 真实容器端到端检查
+scripts/verify-standalone.mjs 构建产物的隐私数据检查
+scripts/ci-scope.mjs        按改动选择 CI 验证范围
+tests/                     业务、API、安全、迁移和重启持久化测试
 ```
 
----
+前端使用实际的 `@heroui/react` V3 组件、Manrope 自托管字体及本地 Gravity 图标；采用暖白、森林绿、圆角表面和响应式侧栏。HeroUI Pro React MCP 未提供可用授权，Figma Kit 的 MCP 访问受当前配额限制，因此本次实现采用 HeroUI V3 公共组件与所提供的设计准则，不声称像素级复刻 Figma 或使用付费 Pro 组件。
 
-## 发布新版本
+分支、PR 和合并队列的检查在 `.github/workflows/ci.yml`，根据改动选择对应单元测试；应用改动检查类型与生产构建，调度或容器改动追加独立容器冒烟。默认不接触真实 Bark，也不发布镜像。
 
-1. 同步版本号：`package.json` 的 `version` 与 README 顶部版本号。
-2. 提交后打标签并推送（标签即版本创建动作）：
-
-```bash
-git tag -a v0.4.2 -m "0.4.2"
-git push origin v0.4.2
-```
-
-3. [`.github/workflows/release.yml`](.github/workflows/release.yml) 自动执行：
-   - 版本一致性守卫：标签 `v0.4.2` 必须等于 `package.json` 的 `version`，否则失败；
-   - 校验：`pnpm install --frozen-lockfile` → `typecheck` → `lint` → `test` → `build`；
-   - 发布：构建 `linux/amd64` + `linux/arm64` 镜像并推送 `ghcr.io/mournink/barker`，标签为 `0.4.2` / `0.4` / `latest`（预发布版本不带 `latest`）。
-
-`workflow_dispatch` 可手动触发同一套校验，但不会推送镜像；流水线需要 `packages: write` 权限（工作流已声明）。
-
----
-
-## 常见问题
-
-**Q: 忘记随机密码？** `docker logs barker` 或 `cat data/access-password.txt`；建议设置 `BARKER_PASSWORD`。
-
-**Q: Bark 推送失败会丢失吗？** 不会。失败记录 `attempts/lastError/nextAttemptAt` 并按 5s→1h 退避无限重试，`/api/overview` 的 `retryQueue` 可见。
-
-**Q: 任务被自动暂停了？** 连续 5 次永久性拒绝（例如 Device Key 填错、Bark 应用被删）后任务会自动暂停并记录最后错误，修好设置后点「恢复」即可继续排队与推送。
-
-**Q: 删除任务提示「请等发送成功后再删除」？** 说明还有未送达的提醒；若确认不再需要，在第二次确认中选择强制删除。
-
-**Q: 「每月」预设为什么 2 月没有触发？** 每月预设按标准 cron 的日历日触发，29–31 日在短月自动跳过；需要「每月最后一天」这类语义请用自定义 cron（如 `0 9 L * *`）。
-
-**Q: 端口冲突？** 修改 `docker-compose.yml` 的 `ports: ["3001:3000"]` 或设置 `PORT`。
-
----
-
-## 版本
-
-- `0.4.2` — 后端加固：请求体上限 64KB（此前可被未认证的大 JSON 撑爆内存）、仅接受同源 JSON 变更请求、登录时间与响应头安全化（`poweredByHeader:false`、`Cache-Control: no-store`、安全响应头）；校验层不再抛 500（无效日期、`https://` 之类半成品 URL、带查询串/锚点的 endpoint、异常图标与控制字符统一 400）；Bark 客户端区分永久/瞬时失败（2xx 非 JSON、字符串 code、4xx 分类）；投递状态机修复：编辑恰好落在到点分钟不再少发一次、发送租约带 token 拒绝迟到回写、租约按真实时间下发、崩溃回收计一次尝试、`sending` 计入待推送统计、退避从 5s 起算、损坏 settings 回退默认值、超过 500 条积压时暂停/恢复不再死锁、恢复后由调度器分批排空；tasks 分页参数越界返回 400；密钥文件为空/过短时启动即报错（不再静默允许空密码登录或伪造会话）。
-- `0.4.1` — 仓库卫生：`.gitignore` 对齐 Next 16 官方模板并忽略自动生成的 `next-env.d.ts`（该文件在 `next dev` 与 `next build` 下内容不同，此前会造成工作区常驻改动与误提交风险），补充 `coverage` / `build` / `.vercel` / `*.pem` / `.pnp*` 等忽略项；CI 在 typecheck 前增加 `next typegen`，保证干净检出下类型定义齐全。
-- `0.4.0` — 前端重构：迁移至 Tailwind CSS 4 + shadcn/ui（11 个基础组件：button / card / dialog / select / badge / alert 等），以顶部导航 + 居中内容区的简约扁平界面替换原深色侧边栏；概览统计合并为单卡片、任务列表改为单卡分节行 + 弹窗式表单、分页 / 空态 / 设置页视觉重做；修复移动端首屏密度、只读 Cron 可读性、320px 导航裁切、短屏弹窗滚动（底部按钮固定）等问题。
-- `0.3.2` — 工程化收尾：以 pnpm 为唯一包管理器（移除 npm 锁文件与未被引用的 tailwind/postcss 依赖，新增 `pnpm-workspace.yaml` 放行原生构建脚本）、`eslint-config-next` 升至 16 并改用原生 flat config、修复 React 19 新 lint 规则下的前端问题与设置页数据目录显示、限流记录有界化、新增 `v*` 标签触发的发布流水线（校验 + 多架构 GHCR 镜像）。
-- `0.3.1` — 迁移至 pnpm（`packageManager` + `pnpm-lock.yaml` + `Dockerfile` 启用 `corepack`），文档与脚本统一为 `pnpm`。
-- `0.3.0` — 多页面重构（`/` 概览 · `/tasks` 分页 · `/settings` 独立页）、侧边栏导航与移动端抽屉、设计系统与分页组件重塑，API 支持 `page/pageSize/status/q` 分页查询。
-- `0.2.0` — Docker 化（standalone 镜像 + compose + healthcheck）、文档重写、依赖升级至 Next 16 / React 19.3 / zod 4.6 等，修复暂停/编辑时的到期提醒丢弃与 `deviceKey` 校验问题。
-- `0.1.0` — 首个可用版本。
-
----
+现有版本发布流程保留在 `.github/workflows/release.yml`。本地验证、提交、远程 CI、镜像发布与部署是不同步骤；构建或修改本项目不代表已发布新版本。
 
 ## License
 

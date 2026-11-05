@@ -50,18 +50,16 @@ test("each occurrence is stored, failures retry, and count completes after two s
   assert.equal(db.getTask(task.id)?.sentCount, 2);
 });
 
-test("pause, update and delete preserve pending deliveries", async () => {
+test("pause, edit and archive retain the pending outbox", async () => {
   const task = db.createTask(taskInput(3), new Date("2026-10-18T00:00:00Z"));
-  db.setTaskStatus(task.id, "paused", new Date("2026-10-18T00:00:00Z"));
-  assert.equal(await scheduler.enqueueDueOccurrences(new Date("2026-10-19T01:30:00Z")), 0);
-  db.setTaskStatus(task.id, "active", new Date("2026-10-18T00:00:00Z"));
   await scheduler.enqueueDueOccurrences(new Date("2026-10-19T01:30:00Z"));
-  assert.throws(() => db.deleteTask(task.id, new Date("2026-10-20T00:00:00Z")), /待重试/);
+  db.setTaskStatus(task.id, "paused", new Date("2026-10-19T02:00:00Z"));
   const updated = db.updateTask(task.id, { ...taskInput(3), name: "Renamed" }, new Date("2026-10-20T00:00:00Z"));
   assert.equal(updated?.name, "Renamed");
   assert.equal(db.deliverySummary().pending, 1);
-  await scheduler.processOneDelivery(new Date("2030-10-20T01:30:00Z"), async () => {});
   assert.equal(db.deleteTask(task.id, new Date("2026-10-20T00:00:00Z")), true);
+  assert.equal(db.deliverySummary().pending, 1);
+  assert.equal(db.getTask(task.id)?.status, "archived");
 });
 
 test("pausing after the due minute still queues that occurrence", async () => {
@@ -72,11 +70,11 @@ test("pausing after the due minute still queues that occurrence", async () => {
   assert.equal(db.getTask(task.id)?.nextRunAt, "2026-10-20T01:30:00.000Z");
 });
 
-test("resuming after missed minutes queues those occurrences before the next future run", () => {
+test("resuming skips the paused interval instead of sending a burst", () => {
   const task = db.createTask(taskInput(5), new Date("2026-10-18T00:00:00Z"));
   db.setTaskStatus(task.id, "paused", new Date("2026-10-18T12:00:00Z"));
-  const resumed = db.setTaskStatus(task.id, "active", new Date("2026-10-21T01:30:00Z"));
-  assert.equal(db.deliverySummary().pending, 3);
+  const resumed = db.setTaskStatus(task.id, "active", new Date("2026-10-21T02:00:00Z"));
+  assert.equal(db.deliverySummary().pending, 0);
   assert.equal(resumed?.status, "active");
   assert.equal(resumed?.nextRunAt, "2026-10-22T01:30:00.000Z");
 });
@@ -104,11 +102,12 @@ test("editing after a due run queues it before moving the schedule", () => {
   assert.equal(updated?.lastRunAt, "2026-10-19T01:30:00.000Z");
 });
 
-test("deleting at a due minute cannot discard an unqueued reminder", () => {
+test("archiving at a due minute materializes the unqueued reminder", () => {
   const task = db.createTask(taskInput(3), new Date("2026-10-18T00:00:00Z"));
-  assert.throws(() => db.deleteTask(task.id, new Date("2026-10-19T01:30:00Z")), /待重试/);
-  assert.ok(db.getTask(task.id));
-  assert.equal(db.getTask(task.id)?.nextRunAt, "2026-10-19T01:30:00.000Z");
+  assert.equal(db.deleteTask(task.id, new Date("2026-10-19T01:30:00Z")), true);
+  assert.equal(db.getTask(task.id)?.status, "archived");
+  assert.equal(db.deliverySummary().pending, 1);
+  assert.throws(() => db.setTaskStatus(task.id, "active"), /不能恢复/);
 });
 
 test("pausing at the final occurrence preserves the completed status", () => {
@@ -161,14 +160,13 @@ test("expired send lease is reclaimed, counted as an attempt, and never double-c
   assert.equal(db.deliverySummary().pending, 1, "in-flight deliveries stay visible");
 });
 
-test("force delete discards deliveries that can never be sent", async () => {
+test("archive cannot discard even a permanently failed delivery", async () => {
   const task = db.createTask(taskInput(5), new Date("2026-10-18T00:00:00Z"));
   await scheduler.enqueueDueOccurrences(new Date("2026-10-19T01:30:00Z"));
   await scheduler.processOneDelivery(new Date("2026-10-19T01:30:00Z"), async () => { throw new Error("HTTP 400"); });
-  assert.throws(() => db.deleteTask(task.id, new Date("2026-10-19T02:00:00Z")), /待重试/);
-  assert.equal(db.deleteTask(task.id, new Date("2026-10-19T02:00:00Z"), { force: true }), true);
-  assert.equal(db.getTask(task.id), null);
-  assert.equal(db.deliverySummary().pending, 0);
+  assert.equal(db.deleteTask(task.id, new Date("2026-10-19T02:00:00Z")), true);
+  assert.equal(db.getTask(task.id)?.status, "archived");
+  assert.equal(db.deliverySummary().pending, 1);
 });
 
 test("corrupt settings fall back to defaults instead of failing every request", () => {
@@ -190,18 +188,19 @@ test("editing at the exact due minute does not consume a repeat", async () => {
   assert.equal(db.deliverySummary().pending, 2);
 });
 
-test("resuming a task with more than 500 missed occurrences is not a dead end", async () => {
+test("large backlog mutation refuses atomically until the worker drains it", async () => {
   const task = db.createTask(
-    { ...taskInput(100_000), name: "Backlog", startsAt: "2026-01-01T00:01:00.000Z", preset: "custom", cron: "* * * * *" },
+    { ...taskInput(100_000), startsAt: "2026-01-01T00:01:00Z", preset: "custom", cron: "* * * * *" },
     new Date("2026-01-01T00:00:00Z"),
   );
-  db.setTaskStatus(task.id, "paused", new Date("2026-01-01T00:00:00Z"));
-  const resumed = db.setTaskStatus(task.id, "active", new Date("2026-01-01T12:00:00Z"));
-  assert.equal(resumed?.status, "active");
-  assert.equal(db.deliverySummary().pending, 500, "first chunk queued before returning");
-  const more = await scheduler.enqueueDueOccurrences(new Date("2026-01-01T12:00:00Z"));
-  assert.equal(more, 220, "the scheduler drains the remainder");
-  assert.equal(db.deliverySummary().pending, 720);
+  const late = new Date("2026-01-01T12:00:00Z");
+  assert.throws(() => db.setTaskStatus(task.id, "paused", late), /积压提醒过多/);
+  assert.equal(db.deliverySummary().pending, 0, "partial mutation is rolled back");
+  assert.equal(db.getTask(task.id)?.status, "active");
+  assert.equal(await scheduler.enqueueDueOccurrences(late), 500);
+  const paused = db.setTaskStatus(task.id, "paused", late);
+  assert.equal(paused?.status, "paused");
+  assert.equal(db.deliverySummary().pending, 720, "all pre-pause reminders survive");
 });
 
 test("a late worker cannot resurrect a delivery whose lease was reclaimed", async () => {
@@ -222,18 +221,19 @@ test("a late worker cannot resurrect a delivery whose lease was reclaimed", asyn
   assert.equal(db.getTask(task.id)?.sentCount, 1);
 });
 
-test("permanent Bark failures pause the task instead of hammering forever", async () => {
-  const task = db.createTask(taskInput(100_000), new Date("2026-10-18T00:00:00Z"));
-  await scheduler.enqueueDueOccurrences(new Date("2026-10-19T01:30:00Z"));
-  let now = new Date("2026-10-19T01:30:00Z");
-  for (let i = 0; i < 5; i += 1) {
-    await scheduler.processOneDelivery(now, async () => {
-      throw new BarkDeliveryError("Bark API 返回 HTTP 404", { kind: "permanent", status: 404 });
-    });
+test("permanent Bark failures never stop scheduling or drop messages", async () => {
+  const task = db.createTask({ ...taskInput(100), startsAt: "2030-10-19T01:30:00Z" }, new Date("2030-10-18T00:00:00Z"));
+  let now = new Date("2030-10-19T01:30:00Z");
+  await scheduler.enqueueDueOccurrences(now);
+  for (let i = 0; i < 12; i += 1) {
+    await scheduler.processOneDelivery(now, async () => { throw new BarkDeliveryError("Bark API 返回 HTTP 404", { kind: "permanent" }); });
     const row = db.__rawDatabaseForTests().prepare("SELECT next_attempt_at FROM deliveries WHERE task_id = ?").get(task.id) as { next_attempt_at: string };
-    now = new Date(row.next_attempt_at);
+    const next = new Date(row.next_attempt_at);
+    assert.ok(next.getTime() - now.getTime() <= 3_600_000);
+    now = next;
   }
-  assert.equal(db.getTask(task.id)?.status, "paused");
+  assert.equal(db.getTask(task.id)?.status, "active");
+  assert.equal(db.deliverySummary().pending, 1);
   assert.match(db.getTask(task.id)?.lastError ?? "", /404/);
 });
 

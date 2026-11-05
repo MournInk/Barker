@@ -1,80 +1,22 @@
 "use client";
 
-import { Bell } from "lucide-react";
+import { Button, Input, Label, TextField } from "@heroui/react";
 import { useState, type FormEvent } from "react";
-import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { api } from "@/lib/ui";
+import { api, errorMessage } from "@/lib/ui";
+import { Glyph } from "./icons";
+import { Notice } from "./primitives";
 
 export function Gate({ onAuthed }: { onAuthed: () => void }) {
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-
-  async function signIn(e: FormEvent) {
-    e.preventDefault();
-    setBusy(true);
-    setError("");
-    try {
-      await api("/api/session", { method: "POST", body: JSON.stringify({ password }) });
-      setPassword("");
-      onAuthed();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "登录失败");
-    } finally {
-      setBusy(false);
-    }
+  async function signIn(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); setBusy(true); setError("");
+    try { await api("/api/session", { method: "POST", body: JSON.stringify({ password }) }); setPassword(""); onAuthed(); }
+    catch (error) { setError(errorMessage(error)); }
+    finally { setBusy(false); }
   }
-
-  return (
-    <main className="grid min-h-screen place-items-center px-4">
-      <Card className="w-full max-w-sm p-6">
-        <form onSubmit={signIn} className="space-y-5">
-          <div className="flex items-center gap-3">
-            <span className="grid size-9 shrink-0 place-items-center rounded-md bg-primary text-primary-foreground">
-              <Bell className="size-4" />
-            </span>
-            <div className="min-w-0">
-              <h1 className="text-base font-medium">输入访问密码</h1>
-              <p className="text-xs text-muted-foreground">Barker · 北京时间可靠提醒</p>
-            </div>
-          </div>
-
-          <div className="space-y-2">
-            <Label htmlFor="access-password" className="text-xs text-muted-foreground">
-              访问密码
-            </Label>
-            <Input
-              id="access-password"
-              type="password"
-              autoFocus
-              autoComplete="current-password"
-              aria-label="访问密码"
-              placeholder="••••••••"
-              value={password}
-              disabled={busy}
-              onChange={(e) => setPassword(e.target.value)}
-            />
-          </div>
-
-          {error && (
-            <p role="alert" className="text-sm text-destructive">
-              {error}
-            </p>
-          )}
-
-          <Button type="submit" className="w-full" disabled={busy}>
-            {busy ? "验证中…" : "进入"}
-          </Button>
-
-          <p className="text-xs leading-relaxed text-muted-foreground">
-            密码在服务启动日志（<code className="font-mono">docker logs</code>）中打印，也可通过{" "}
-            <code className="font-mono">BARKER_PASSWORD</code> 固定。
-          </p>
-        </form>
-      </Card>
-    </main>
-  );
+  return <main className="access-page"><section className="access-story"><div className="brand"><span className="brand-mark"><Glyph name="bell" size={24} /></span><span>barker.</span></div><div className="access-story-copy"><span className="eyebrow">简单安排，准时抵达</span><h1>记住重要的，<br />专注眼前的。</h1><p>一个安静、可靠的提醒工作空间。<br />把每一次惦记，送到恰好的时刻。</p><div className="access-orbit" aria-hidden="true"><div className="orbit-ring" /><div className="orbit-ring inner" /><span className="orbit-center"><Glyph name="bell" size={52} /></span><span className="orbit-spark one" /><span className="orbit-spark two" /></div></div><p className="access-footnote"><Glyph name="shield" size={16} />私有部署 · 可靠投递 · 安心专注</p></section>
+    <section className="access-form-section"><form onSubmit={signIn} className="access-form"><span className="access-lock"><Glyph name="lock" size={23} /></span><p className="eyebrow">你的专属工作空间</p><h2>欢迎回来</h2><p className="access-intro">输入服务启动时生成的密码，继续你的安排。</p><TextField className="field" name="password" type="password" isRequired><Label>访问密码</Label><Input fullWidth autoComplete="current-password" autoFocus placeholder="输入访问密码" value={password} onChange={(event) => setPassword(event.target.value)} disabled={busy} maxLength={300} /></TextField>{error && <Notice>{error}</Notice>}<Button fullWidth type="submit" isPending={busy} isDisabled={!password}>进入工作空间<Glyph name="arrow" /></Button><div className="access-help"><Glyph name="shield" size={16} /><p>密码可在启动日志中查看，或通过<br /><code>BARKER_PASSWORD</code> 自行设置。</p></div></form><span className="access-copyright">Barker · 为每一个重要时刻</span></section>
+  </main>;
 }
