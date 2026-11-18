@@ -34,13 +34,17 @@ async function until(check, timeout = 90_000) {
 }
 
 let created = false;
+let volumeCreated = false;
 try {
   docker("image", "inspect", image);
   await new Promise((resolve) => mock.listen(0, "0.0.0.0", resolve));
   const mockPort = mock.address().port;
-  docker("run", "-d", "--init", "--name", name, "-p", "127.0.0.1::3000",
+  docker("volume", "create", "--label", `barker.smoke=${name}`, volume);
+  volumeCreated = true;
+  docker("run", "-d", "--init", "--name", name, "--label", `barker.smoke=${name}`, "-p", "127.0.0.1::3000",
     ...(process.platform === "linux" ? ["--add-host", "host.docker.internal:host-gateway"] : []),
-    "--mount", `type=volume,source=${volume},target=/app/data`, image);
+    "--mount", `type=volume,source=${volume},target=/app/data`,
+    ...(process.env.BARKER_SMOKE_PLATFORM ? ["--platform", process.env.BARKER_SMOKE_PLATFORM] : []), image);
   created = true;
   const address = () => `http://127.0.0.1:${docker("port", name, "3000/tcp").split(":").at(-1)}`;
   let base = address();
@@ -63,9 +67,10 @@ try {
     assert.ok(response.ok, `${method} ${path}: ${JSON.stringify(data)}`);
     return data;
   };
+  const beforeSettings = await api("/api/settings");
   await api("/api/settings", "PUT", {
     endpoint: `http://host.docker.internal:${mockPort}`, deviceKey,
-    title: "Barker", sound: "", group: "Smoke", icon: "",
+    title: "Barker", sound: "", group: "Smoke", icon: "", revision: beforeSettings.revision,
   });
   const settings = await api("/api/settings");
   assert.equal(settings.deviceKeyConfigured, true);
@@ -82,7 +87,9 @@ try {
     return deliveries.find((item) => item.taskId === task.id && item.attempts > 0);
   });
   assert.match(failed.lastError, /503/);
-  await api(`/api/tasks/${task.id}`, "DELETE");
+  const currentTask = (await api("/api/tasks")).tasks.find((item) => item.id === task.id);
+  const archived = await fetch(`${base}/api/tasks/${task.id}`, { method: "DELETE", headers: { cookie, "if-match": String(currentTask.revision) } });
+  assert.equal(archived.status, 200);
   docker("stop", "--time", "30", name);
   // Next 16 completes cleanup and exits with 128 + SIGTERM (143), not zero.
   const exitCode = Number(docker("inspect", name, "--format", "{{.State.ExitCode}}"));
@@ -115,10 +122,19 @@ try {
   }
   throw error;
 } finally {
-  if (created) {
-    docker("stop", "--time", "30", name);
-    docker("rm", name);
-    docker("volume", "rm", volume);
+  const cleanup = (operation) => {
+    try { operation(); }
+    catch (error) { console.error(`Smoke cleanup failed: ${error.message}`); process.exitCode = 1; }
+  };
+  let containers = "";
+  try { containers = docker("ps", "--all", "--quiet", "--filter", `label=barker.smoke=${name}`); }
+  catch (error) { console.error(`Smoke cleanup failed: ${error.message}`); process.exitCode = 1; }
+  if (containers) cleanup(() => docker("container", "rm", "--force", ...containers.split("\n")));
+  if (volumeCreated) cleanup(() => docker("volume", "rm", volume));
+  if (mock.listening) {
+    await new Promise((resolve) => mock.close((error) => {
+      if (error) { console.error(`Smoke cleanup failed: ${error.message}`); process.exitCode = 1; }
+      resolve();
+    }));
   }
-  if (mock.listening) await new Promise((resolve, reject) => mock.close((error) => error ? reject(error) : resolve()));
 }

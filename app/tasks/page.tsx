@@ -5,10 +5,12 @@ import { useEffect, useState } from "react";
 import { Glyph } from "@/components/icons";
 import { Confirm, Empty, IconButton, Notice, TaskBadge } from "@/components/primitives";
 import { Pagination } from "@/components/pagination";
+import { Selection } from "@/components/selection";
 import { useResource } from "@/components/use-resource";
 import { useWorkspace } from "@/components/workspace-context";
 import type { Task } from "@/lib/types";
-import { api, errorMessage, formatTime, PRESET_LABELS } from "@/lib/ui";
+import { api, errorMessage, PRESET_LABELS } from "@/lib/ui";
+import { useTime } from "@/components/use-time";
 
 const filters = [
   { id: "all", label: "全部提醒" },
@@ -20,6 +22,7 @@ const filters = [
 const PAGE_SIZE = 10;
 
 export default function TasksPage() {
+  const { formatTime } = useTime();
   const { openTask, refresh: refreshDashboard, notify } = useWorkspace();
   const [filter, setFilter] = useState("all");
   const [page, setPage] = useState(1);
@@ -27,6 +30,8 @@ export default function TasksPage() {
   const [search, setSearch] = useState("");
   const [archive, setArchive] = useState<Task | null>(null);
   const [busy, setBusy] = useState("");
+  const [selected, setSelected] = useState<string[]>([]);
+  const [destroy, setDestroy] = useState<Task | null>(null);
   useEffect(() => {
     const timer = setTimeout(() => { setSearch(query); setPage(1); }, 250);
     return () => clearTimeout(timer);
@@ -34,7 +39,7 @@ export default function TasksPage() {
 
   const params = new URLSearchParams({ page: String(page), pageSize: String(PAGE_SIZE), q: search });
   if (filter !== "all") params.set("status", filter);
-  const { data, error, refresh } = useResource<{ tasks: Task[]; total: number }>(`/api/tasks?${params}`);
+  const { data, error, refresh } = useResource<{ tasks: Task[]; total: number; page: number }>(`/api/tasks?${params}`);
 
   function returnToPreviousPageIfEmpty() {
     if (data?.tasks.length === 1 && page > 1) setPage(page - 1);
@@ -44,11 +49,11 @@ export default function TasksPage() {
     setBusy(task.id);
     try {
       await api(`/api/tasks/${task.id}`, {
-        method: "PATCH", body: JSON.stringify({ status: task.status === "paused" ? "active" : "paused" }),
+        method: "PATCH", body: JSON.stringify({ status: task.status === "paused" ? "active" : "paused", revision: task.revision }),
       });
       notify(task.status === "paused" ? "提醒已恢复，暂停期间不会补发。" : "提醒已暂停，已排队的消息会继续投递。");
       if (filter !== "all") returnToPreviousPageIfEmpty();
-      await Promise.all([refresh(), refreshDashboard()]);
+      void Promise.allSettled([refresh(), refreshDashboard()]);
     } catch (error) {
       notify(errorMessage(error), "error");
     } finally {
@@ -60,16 +65,49 @@ export default function TasksPage() {
     if (!archive) return;
     setBusy(archive.id);
     try {
-      await api(`/api/tasks/${archive.id}`, { method: "DELETE" });
+      await api(`/api/tasks/${archive.id}`, { method: "DELETE", headers: { "if-match": String(archive.revision) } });
       setArchive(null);
       returnToPreviousPageIfEmpty();
       notify("提醒已归档。投递记录和待发送消息均已保留。");
-      await Promise.all([refresh(), refreshDashboard()]);
+      void Promise.allSettled([refresh(), refreshDashboard()]);
     } catch (error) {
       notify(errorMessage(error), "error");
     } finally {
       setBusy("");
     }
+  }
+
+  async function bulk(status: string) {
+    if (!data) return;
+    setBusy("bulk");
+    try {
+      const result = await api<{ results: Array<{ success: boolean; error?: string }> }>("/api/tasks", { method: "PATCH", body: JSON.stringify({ status, items: data.tasks.filter((task) => selected.includes(task.id)).map(({ id, revision }) => ({ id, revision })) }) });
+      const failures = result.results.filter((item) => !item.success);
+      notify(failures.length ? failures.map((item) => item.error).join("；") : "批量操作完成", failures.length ? "error" : "success");
+      setSelected([]); await Promise.all([refresh(), refreshDashboard()]);
+    } catch (error) { notify(errorMessage(error), "error"); }
+    finally { setBusy(""); }
+  }
+
+  async function restore(task: Task) {
+    setBusy(task.id);
+    try {
+      await api(`/api/tasks/${task.id}`, { method: "PATCH", body: JSON.stringify({ status: "active", revision: task.revision }) });
+      notify("提醒已恢复，归档期间不会补发。");
+      await Promise.all([refresh(), refreshDashboard()]);
+    } catch (error) { notify(errorMessage(error), "error"); }
+    finally { setBusy(""); }
+  }
+
+  async function removePermanently() {
+    if (!destroy) return;
+    setBusy(destroy.id);
+    try {
+      await api(`/api/tasks/${destroy.id}?permanent=1`, { method: "DELETE", headers: { "if-match": String(destroy.revision) } });
+      setDestroy(null); notify("任务及其投递记录已永久删除。");
+      await Promise.all([refresh(), refreshDashboard()]);
+    } catch (error) { notify(errorMessage(error), "error"); }
+    finally { setBusy(""); }
   }
 
   return (
@@ -83,6 +121,11 @@ export default function TasksPage() {
         <Button onPress={() => openTask()}><Glyph name="plus" size={17} />新建提醒</Button>
       </div>
       <Card className="tasks-panel">
+        <div className="bulk-toolbar">
+          <Selection label="选择本页提醒" selected={Boolean(data?.tasks.length && data.tasks.every((task) => selected.includes(task.id)))} onChange={(value) => setSelected(value ? data?.tasks.map((task) => task.id) ?? [] : [])} />
+          <span>已选 {data?.tasks.filter((task) => selected.includes(task.id)).length ?? 0} 项</span>
+          {[{ value: "paused", label: "批量暂停" }, { value: "active", label: "批量恢复" }, { value: "archived", label: "批量归档" }].map((action) => <Button key={action.value} size="sm" variant="ghost" isDisabled={!data?.tasks.some((task) => selected.includes(task.id)) || Boolean(busy)} onPress={() => void bulk(action.value)}>{action.label}</Button>)}
+        </div>
         <div className="list-toolbar">
           <Tabs selectedKey={filter} onSelectionChange={(key) => { setFilter(String(key)); setPage(1); }} variant="secondary" className="filter-tabs">
             <Tabs.ListContainer>
@@ -97,21 +140,22 @@ export default function TasksPage() {
           </div>
         </div>
         {error && <Notice>{error}<Button variant="ghost" size="sm" onPress={() => void refresh()}>重试</Button></Notice>}
-        {!data ? <div className="loading-state">正在整理你的提醒…</div> : !data.tasks.length ? (
+        {!data ? error ? null : <div className="loading-state">正在整理你的提醒…</div> : !data.tasks.length ? (
           <Empty
             title={search ? "没有找到相关提醒" : filter === "all" ? "给未来的自己，一个提醒" : "这里暂时没有提醒"}
-            description={search ? "试试其他关键词，或切换提醒状态。" : filter === "archived" ? "归档会停止未来排期，但始终保留消息和历史记录。" : "不必把所有事都记在心里，让 Barker 帮你分担。"}
+            description={search ? "试试其他关键词，或切换提醒状态。" : filter === "archived" ? "归档会停止未来排期；历史记录会保留，直到你主动清理。" : "不必把所有事都记在心里，让 Barker 帮你分担。"}
             action={filter === "all" && !search ? <Button variant="outline" onPress={() => openTask()}>创建第一个提醒</Button> : undefined}
           />
         ) : (
           <div className="table-scroll">
             <table className="task-table">
               <thead>
-                <tr><th>提醒事项</th><th>重复周期</th><th>下一次提醒</th><th>投递进度</th><th>状态</th><th><span className="sr-only">操作</span></th></tr>
+                <tr><th>选择</th><th>提醒事项</th><th>重复周期</th><th>下一次提醒</th><th>投递计数</th><th>状态</th><th><span className="sr-only">操作</span></th></tr>
               </thead>
               <tbody>
                 {data.tasks.map((task) => (
                   <tr key={task.id}>
+                    <td><Selection label={`选择 ${task.name}`} selected={selected.includes(task.id)} onChange={(value) => setSelected((current) => value ? [...current, task.id] : current.filter((id) => id !== task.id))} /></td>
                     <td>
                       <div className="task-name-cell">
                         <span className={`task-symbol ${task.status === "paused" || task.status === "archived" ? "subdued" : ""}`}>
@@ -120,28 +164,30 @@ export default function TasksPage() {
                         <div>
                           <strong>{task.name}</strong>
                           <p>{task.description || "给重要的事，留一个准时的提醒。"}</p>
-                          {task.lastError && task.pendingCount > 0 && <span className="task-error"><Glyph name="warning" size={12} />有消息等待重试</span>}
+                          {task.lastError && <span className="task-error"><Glyph name="warning" size={12} />{task.pendingCount > 0 ? "有消息等待重试" : task.lastError}</span>}
                         </div>
                       </div>
                     </td>
                     <td>
                       <span className="schedule-cell"><Glyph name="refresh" size={13} />{PRESET_LABELS[task.preset]}</span>
                       <code className="cron-caption">{task.cron}</code>
+                      <small className="field-hint">{task.timeZone}</small>
                     </td>
                     <td><span className="next-run-cell">{task.status === "active" ? formatTime(task.nextRunAt) : task.status === "paused" ? "恢复后继续" : "—"}</span></td>
                     <td>
-                      <span className="progress-count">{task.sentCount}<span> / {task.repeatCount ?? "按日期"}</span></span>
-                      <small className="progress-caption">{task.pendingCount ? `${task.pendingCount} 条等待投递` : task.endDate ? `截至 ${task.endDate}` : "已送达"}</small>
+                      <span className="progress-count">{task.sentCount}<span> 次已接收</span></span>
+                      <small className="progress-caption">累计排期 {task.queuedCount} · {task.repeatCount ? `上限 ${task.repeatCount}` : task.endDate ? "按日期结束" : "持续重复"}</small>
+                      <small className="progress-caption">{task.pendingCount ? `${task.pendingCount} 条等待投递` : task.endDate ? `截至 ${task.endDate}` : task.sentCount ? `${task.sentCount} 次 Bark 已接收` : "尚未投递"}</small>
                     </td>
                     <td><TaskBadge task={task} /></td>
-                    <td><TaskActions task={task} busy={busy === task.id} onToggle={() => void toggle(task)} onArchive={() => setArchive(task)} /></td>
+                    <td><TaskActions task={task} busy={Boolean(busy)} onToggle={() => void toggle(task)} onArchive={() => setArchive(task)} onRestore={() => void restore(task)} onDelete={() => setDestroy(task)} /></td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
         )}
-        {data && <Pagination page={page} total={data.total} pageSize={PAGE_SIZE} onChange={setPage} />}
+        {data && <Pagination page={data.page} total={data.total} pageSize={PAGE_SIZE} onChange={setPage} />}
       </Card>
       <div className="page-note"><Glyph name="shield" size={16} /><p>暂停只停止未来排期，队列中的提醒仍会继续投递；归档不会删除任何消息。</p></div>
       {archive && (
@@ -149,11 +195,12 @@ export default function TasksPage() {
           <p>未来的排期将停止。已经到期的提醒会继续投递，全部历史记录都会保留，你也可以随时复制为新提醒。</p>
         </Confirm>
       )}
+      {destroy && <Confirm title={`永久删除「${destroy.name}」？`} confirmLabel="永久删除" onClose={() => setDestroy(null)} onConfirm={() => void removePermanently()} busy={busy === destroy.id}><p>任务、待投递消息和全部尝试历史都会删除，此操作无法撤销。</p></Confirm>}
     </div>
   );
 }
 
-function TaskActions({ task, busy, onToggle, onArchive }: { task: Task; busy: boolean; onToggle: () => void; onArchive: () => void }) {
+function TaskActions({ task, busy, onToggle, onArchive, onRestore, onDelete }: { task: Task; busy: boolean; onToggle: () => void; onArchive: () => void; onRestore: () => void; onDelete: () => void }) {
   const { openTask } = useWorkspace();
   const editable = task.status === "active" || task.status === "paused";
   return (
@@ -166,12 +213,16 @@ function TaskActions({ task, busy, onToggle, onArchive }: { task: Task; busy: bo
             if (key === "toggle") onToggle();
             if (key === "copy") openTask(task, true);
             if (key === "archive") onArchive();
+            if (key === "restore") onRestore();
+            if (key === "delete") onDelete();
           }}>
             {editable && <Dropdown.Item id="toggle" textValue={task.status === "paused" ? "恢复提醒" : "暂停提醒"}>
               <Glyph name={task.status === "paused" ? "play" : "pause"} /><Label>{task.status === "paused" ? "恢复提醒" : "暂停提醒"}</Label>
             </Dropdown.Item>}
             <Dropdown.Item id="copy" textValue="复制为新提醒"><Glyph name="copy" /><Label>复制为新提醒</Label></Dropdown.Item>
             {task.status !== "archived" && <Dropdown.Item id="archive" textValue="归档提醒"><Glyph name="archive" /><Label>归档提醒</Label></Dropdown.Item>}
+            {task.status === "archived" && <Dropdown.Item id="restore" textValue="恢复归档提醒"><Label>恢复归档提醒</Label></Dropdown.Item>}
+            {task.status === "archived" && <Dropdown.Item id="delete" textValue="永久删除"><Label>永久删除</Label></Dropdown.Item>}
           </Dropdown.Menu>
         </Dropdown.Popover>
       </Dropdown>

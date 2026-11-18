@@ -1,6 +1,7 @@
 "use client";
 
 import { I18nProvider } from "react-aria";
+import { usePathname } from "next/navigation";
 import { Button } from "@heroui/react";
 import { useEffect, useState, type ReactNode } from "react";
 import type { Dashboard, Task } from "@/lib/types";
@@ -35,7 +36,8 @@ export function Workspace({ children }: { children: ReactNode }) {
 }
 
 function AuthenticatedWorkspace({ children, logout }: { children: ReactNode; logout: () => Promise<void> }) {
-  const { data: dashboard, error, refresh } = useResource<Dashboard>("/api/overview");
+  const path = usePathname();
+  const { data: dashboard, error, refresh } = useResource<Dashboard>("/api/overview", path === "/" ? 15_000 : 60_000);
   const [editor, setEditor] = useState<{ task?: Task; duplicate?: boolean } | null>(null);
   const [notice, setNotice] = useState<{ message: string; kind: "error" | "success" } | null>(null);
   useEffect(() => {
@@ -44,7 +46,7 @@ function AuthenticatedWorkspace({ children, logout }: { children: ReactNode; log
     return () => clearTimeout(timer);
   }, [notice]);
   return <WorkspaceContext.Provider value={{ dashboard, error, refresh, logout, openTask: (task, duplicate) => setEditor({ task, duplicate }), notify: (message, kind = "success") => setNotice({ message, kind }) }}>
-    <Shell><div className="workspace-notices">{error && <Notice>暂时无法同步，当前显示上次数据。{error}<Button size="sm" variant="ghost" onPress={() => void refresh()}>重试</Button></Notice>}{notice && <Notice kind={notice.kind} onClose={() => setNotice(null)}>{notice.message}</Notice>}</div>{children}</Shell>
+    <Shell><div className="workspace-notices">{error && <Notice>{dashboard ? "暂时无法同步，当前显示上次数据。" : "暂时无法读取工作区。"}{error}<Button size="sm" variant="ghost" onPress={() => void refresh()}>重试</Button></Notice>}{notice && <Notice kind={notice.kind} onClose={() => setNotice(null)}>{notice.message}</Notice>}</div>{children}</Shell>
     {editor && <TaskEditor task={editor.task} duplicate={editor.duplicate} onClose={() => setEditor(null)} />}
   </WorkspaceContext.Provider>;
 }

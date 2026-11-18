@@ -1,16 +1,18 @@
 "use client";
 
 import { Button, Chip, Input, Label, ListBox, Modal, Select, TextField, Tooltip } from "@heroui/react";
-import type { ComponentProps, ReactNode } from "react";
+import { useId, type ComponentProps, type ReactNode } from "react";
 import { Glyph, type IconName } from "./icons";
 import type { Task } from "@/lib/types";
 
 export function IconButton({ label, icon, ...props }: { label: string; icon: IconName } & Omit<ComponentProps<typeof Button>, "children">) {
-  return <Tooltip delay={300}><Button isIconOnly variant="ghost" aria-label={label} {...props}><Glyph name={icon} /></Button><Tooltip.Content>{label}</Tooltip.Content></Tooltip>;
+  return <Tooltip delay={300}><Button isIconOnly type="button" variant="ghost" aria-label={label} {...props}><Glyph name={icon} /></Button><Tooltip.Content>{label}</Tooltip.Content></Tooltip>;
 }
 
 export function Field({ label, hint, ...props }: { label: string; hint?: string } & ComponentProps<typeof Input>) {
-  return <TextField className="field"><Label>{label}</Label><Input variant="secondary" {...props} />{hint && <p className="field-hint">{hint}</p>}</TextField>;
+  const hintId = useId();
+  const describedBy = [props["aria-describedby"], hint ? hintId : ""].filter(Boolean).join(" ") || undefined;
+  return <TextField className="field"><Label>{label}</Label><Input variant="secondary" {...props} aria-describedby={describedBy} />{hint && <p id={hintId} className="field-hint">{hint}</p>}</TextField>;
 }
 
 export function Pick({ label, value, options, onChange, className = "" }: { label: string; value: string; options: Array<{ value: string; label: string }>; onChange: (value: string) => void; className?: string }) {
@@ -24,7 +26,7 @@ export function TaskBadge({ task }: { task: Task }) {
   const meta = {
     active: { color: "success" as const, label: "进行中" },
     paused: { color: "default" as const, label: "已暂停" },
-    completed: { color: "default" as const, label: task.pendingCount ? "排期结束" : "已完成" },
+    completed: { color: "default" as const, label: "排期结束" },
     archived: { color: "default" as const, label: "已归档" },
   }[task.status];
   return <Chip size="sm" variant="soft" color={meta.color}><span className={`status-dot ${task.status === "active" ? "live" : ""}`} /><Chip.Label>{meta.label}</Chip.Label></Chip>;
@@ -40,6 +42,6 @@ export function Empty({ title, description, action, icon = "bell" }: { title: st
 
 export function Confirm({ title, children, confirmLabel, onConfirm, onClose, busy = false }: { title: string; children: ReactNode; confirmLabel: string; onConfirm: () => void; onClose: () => void; busy?: boolean }) {
   return <Modal.Backdrop isOpen onOpenChange={(open) => { if (!open && !busy) onClose(); }} isDismissable={!busy}><Modal.Container size="sm" placement="center"><Modal.Dialog>
-    <Modal.Header><Modal.Heading>{title}</Modal.Heading></Modal.Header><Modal.Body>{children}</Modal.Body><Modal.Footer><Button variant="ghost" isDisabled={busy} onPress={onClose}>取消</Button><Button variant="danger-soft" isPending={busy} onPress={onConfirm}>{confirmLabel}</Button></Modal.Footer>
+    <Modal.Header><Modal.Heading>{title}</Modal.Heading></Modal.Header><Modal.Body>{children}</Modal.Body><Modal.Footer><Button type="button" variant="ghost" isDisabled={busy} onPress={onClose}>取消</Button><Button type="button" variant="danger-soft" isPending={busy} onPress={onConfirm}>{confirmLabel}</Button></Modal.Footer>
   </Modal.Dialog></Modal.Container></Modal.Backdrop>;
 }

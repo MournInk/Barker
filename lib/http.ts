@@ -1,27 +1,48 @@
 import { NextResponse } from "next/server";
+import { DomainError } from "./errors";
+import { randomUUID } from "node:crypto";
+import { logError } from "./logging";
 
 /** Requests are tiny JSON documents; anything bigger is abuse or a mistake. */
 export const MAX_REQUEST_BYTES = 64 * 1024;
 
-export class HttpError extends Error {
-  readonly status: number;
-
-  constructor(message: string, status: number) {
-    super(message);
-    this.name = "HttpError";
-    this.status = status;
-  }
-}
+export class HttpError extends DomainError {}
 
 export function jsonError(message: string, status: number): NextResponse {
   return NextResponse.json({ error: message }, { status });
 }
 
-/** Turn a thrown HttpError into its intended status, everything else into 400/500. */
-export function jsonErrorFrom(error: unknown, fallbackStatus = 400, fallbackMessage = "请求内容无效"): NextResponse {
-  if (error instanceof HttpError) return jsonError(error.message, error.status);
-  if (error instanceof Error) return jsonError(error.message, fallbackStatus);
+/** Turn a domain error into its intended status and everything else into a sanitized 500. */
+export function jsonErrorFrom(error: unknown, fallbackStatus = 500, fallbackMessage = "服务暂时无法完成请求，请稍后重试"): NextResponse {
+  if (error instanceof DomainError) return jsonError(error.message, error.status);
   return jsonError(fallbackMessage, fallbackStatus);
+}
+
+/** Keep every API failure in the JSON contract, including auth/DB bootstrapping errors. */
+export function apiRoute<Args extends unknown[]>(
+  handler: (...args: Args) => Promise<NextResponse>,
+): (...args: Args) => Promise<NextResponse> {
+  return async (...args) => {
+    const requestId = randomUUID();
+    try {
+      const response = await handler(...args);
+      response.headers.set("x-request-id", requestId);
+      return response;
+    } catch (error) {
+      if (!(error instanceof DomainError)) {
+        const request = args[0] instanceof Request ? args[0] : null;
+        logError("api.failed", error, { requestId, method: request?.method ?? "unknown", path: request ? new URL(request.url).pathname : "unknown" });
+      }
+      const response = jsonErrorFrom(error);
+      response.headers.set("x-request-id", requestId);
+      return response;
+    }
+  };
+}
+
+export function expectedRevision(value: unknown): number {
+  if (!Number.isSafeInteger(value) || Number(value) < 1) throw new HttpError("缺少有效版本号，请刷新后重试", 428);
+  return Number(value);
 }
 
 export async function requestBody(request: Request): Promise<unknown> {
@@ -45,7 +66,7 @@ export async function requestBody(request: Request): Promise<unknown> {
       }
       chunks.push(value);
     }
-    text = Buffer.concat(chunks).toString("utf8");
+    text = new TextDecoder().decode(Buffer.concat(chunks));
   } catch (error) {
     if (error instanceof HttpError) throw error;
     throw new HttpError("无法读取请求体", 400);
@@ -74,9 +95,11 @@ export function jsonObjectBody(value: unknown): Record<string, unknown> {
 export function requireSameOriginMutation(request: Request): NextResponse | null {
   const method = request.method.toUpperCase();
   if (method === "GET" || method === "HEAD") return null;
-  const contentType = (request.headers.get("content-type") ?? "").toLowerCase();
+  const declared = Number(request.headers.get("content-length") ?? "0");
+  if (Number.isFinite(declared) && declared > MAX_REQUEST_BYTES) return jsonError("请求体过大", 413);
+  const contentType = (request.headers.get("content-type") ?? "").split(";", 1)[0].trim().toLowerCase();
   const expectsJsonBody = method === "POST" || method === "PUT" || method === "PATCH";
-  if (expectsJsonBody && !contentType.startsWith("application/json")) {
+  if (expectsJsonBody && contentType !== "application/json") {
     return jsonError("请求必须使用 application/json", 415);
   }
   const site = request.headers.get("sec-fetch-site");

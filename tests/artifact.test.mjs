@@ -24,7 +24,7 @@ test("standalone verification accepts runtime code without private state", () =>
 });
 
 test("standalone verification rejects databases, WAL, keys and environment files", () => {
-  for (const file of ["data/barker.sqlite", "data/barker.sqlite-wal", "data/access-password.txt", "data/session-secret.txt", ".env.local"]) {
+  for (const file of ["data/barker.sqlite", "data/barker.sqlite-wal", "data/barker.sqlite.bak", "data/access-password.txt", "data/session-secret.txt", ".env", ".env.local", ".envrc"]) {
     const result = check([file]);
     assert.equal(result.status, 1, file);
     assert.match(result.stderr, /Runtime data must not be included/);

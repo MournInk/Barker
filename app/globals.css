@@ -400,3 +400,70 @@ code { font-size: 13px; }
 @media (max-width: 760px) { .hero-grid, .overview-detail-grid { grid-template-columns: minmax(0, 1fr); } .next-panel { display: none; } .welcome-panel { min-height: 286px; } .hero-orbit { right: 20px; opacity: 1; } .hero-copy { width: 67%; } .hero-copy h2 { font-size: 32px; } .hero-copy p { font-size: 13px; } .metrics-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; } .metric-card > div > span { font-size: 11px; } .metric-card p { font-size: 13px; } .metric-card strong { font-size: 30px; } .metric-symbol { width: 34px; height: 34px; } .metric-symbol svg { width: 20px; height: 20px; } .activity-panel { min-height: auto; } .activity-chart { height: 118px; } .activity-footnote { margin-top: 20px; } .recent-row time { margin-right: 0; } .page-heading { align-items: flex-start; } .today-label { display: none; } .page-heading > .button, .page-heading > .chip { margin-top: 24px; } .settings-grid { grid-template-columns: 1fr; } .settings-aside { display: grid; grid-template-columns: 1fr 1fr; align-items: start; gap: 24px; } .notification-preview { grid-row: span 2; } .settings-help { padding-top: 15px; } .storage-note { grid-column: 2; } .phone-preview { height: 300px; padding-top: 57px; } .test-card { padding: 22px; } .access-page { padding: 12px; gap: 0; grid-template-columns: 1fr; } .access-story { display: none; } .access-form-section { min-height: calc(100dvh - 24px); padding: 55px 20px 80px; } .access-form { max-width: 360px; } .access-form .eyebrow::before { content: "barker. / "; font-weight: 700; color: var(--accent); } .task-table th:nth-child(2), .task-table td:nth-child(2) { display: none; } .task-table td { padding: 20px 10px; } }
 @media (max-width: 540px) { .topbar { height: 65px; padding: 0 19px; } .breadcrumb, .topbar-trailing { gap: 8px; } .breadcrumb-root, .breadcrumb > svg, .timezone { display: none; } .sync-status { font-size: 11px; } .topbar-trailing { gap: 7px; } .workspace-main { padding: 17px 18px 30px; } .workspace-footer { padding: 0 18px 20px; font-size: 10px; } .page-stack { gap: 19px; } .page-heading { gap: 8px; } .page-heading h1 { font-size: 25px; letter-spacing: -.8px; margin-top: 7px; margin-bottom: 7px; } .eyebrow { font-size: 10px; letter-spacing: 1.2px; } .page-heading > div > p:last-child { font-size: 12px; max-width: 285px; } .page-heading > .button { margin-top: 23px; padding: 0 11px; height: 34px; font-size: 12px; flex-shrink: 0; gap: 5px; } .page-heading > .chip { display: none; } .setup-banner { padding: 13px; gap: 9px; } .setup-symbol { width: 31px; height: 31px; border-radius: 9px; } .setup-banner strong { font-size: 13px; } .setup-banner p { font-size: 11px; max-width: 195px; line-height: 1.7; } .setup-banner .text-action { font-size: 11px; gap: 3px; } .welcome-panel { padding: 26px 24px; min-height: 278px; } .hero-copy { width: 90%; } .hero-copy h2 { font-size: 30px; margin-top: 18px; } .hero-copy p { font-size: 12px; } .hero-orbit { width: 210px; height: 210px; right: -63px; top: 37px; opacity: .48; z-index: 0; } .hero-bell { top: 68px; left: 68px; width: 68px; height: 68px; } .hero-bell svg { width: 38px; height: 38px; } .hero-button { font-size: 12px; margin-top: 20px; } .hero-caption { right: 17px; font-size: 10px; } .metric-card { padding: 18px 15px; gap: 3px; } .metric-card p { font-size: 12px; } .metric-card strong { font-size: 29px; } .metric-card > div > span { white-space: normal; font-size: 10px; line-height: 1.8; } .metric-symbol { width: 27px; height: 27px; border-radius: 9px; } .metric-symbol svg { width: 16px; height: 16px; } .metrics-grid { gap: 12px; } .upcoming-panel, .activity-panel, .recent-panel { padding: 20px 18px; } .section-top h2 { font-size: 14px; } .section-top p { font-size: 11px; } .muted-action { font-size: 11px; } .week-strip { gap: 3px; margin-top: 20px; } .week-strip button { min-height: 49px; } .week-strip button small { font-size: 10px; } .week-strip button span { font-size: 15px; } .upcoming-row { gap: 9px; } .upcoming-time { width: 42px; font-size: 15px; } .row-chevron { display: none; } .upcoming-copy strong { font-size: 13px; } .upcoming-copy small { font-size: 10px; } .upcoming-row .chip__label { font-size: 11px; } .recent-row { display: grid; grid-template-columns: 30px minmax(0, 1fr) auto; gap: 8px; padding: 15px 0; } .recent-row time { display: none; } .recent-row small { font-size: 10px; } .recent-row strong { font-size: 12px; } .inline-empty { font-size: 12px; line-height: 1.9; text-align: left; } .list-toolbar { padding: 16px; gap: 13px; align-items: stretch; } .filter-tabs { width: 100%; } .filter-tabs .tabs__list-container { width: 100%; } .filter-tabs .tabs__tab { padding: 8px 10px; font-size: 12px; } .search-field { width: 100%; } .task-table thead { display: none; } .table-scroll { overflow: visible; } .task-table, .task-table tbody { display: block; width: 100%; } .task-table tr { display: grid; grid-template-columns: minmax(0, 1fr) auto; padding: 19px 17px; gap: 13px 7px; border-top: 1px solid var(--separator); } .task-table td { padding: 0 !important; border: 0; display: block; } .task-table td:first-child { max-width: none; min-width: 0; grid-column: 1; grid-row: 1; } .task-table td:nth-child(3) { grid-column: 1; grid-row: 2; padding-left: 49px !important; } .task-table td:nth-child(3)::before { content: "下次 "; color: var(--muted); font-size: 11px; } .task-table td:nth-child(4) { grid-column: 1; grid-row: 3; padding-left: 49px !important; display: flex; gap: 9px; align-items: center; } .task-table td:nth-child(5) { grid-column: 2; grid-row: 1; align-self: start; padding-top: 2px !important; } .task-table td:nth-child(6) { grid-column: 2; grid-row: 2 / 4; align-self: end; } .task-name-cell { gap: 11px; align-items: flex-start; } .task-name-cell p { max-width: 195px; font-size: 11px; } .task-name-cell strong { font-size: 13px; } .task-name-cell .task-symbol { width: 38px; height: 38px; } .next-run-cell { font-size: 11px; } .progress-caption { margin: 0; font-size: 10px; } .progress-count, .progress-count > span { font-size: 11px; } .row-actions { gap: 0; } .row-actions .button { width: 40px; min-width: 40px; height: 40px; } .row-actions svg { width: 17px; height: 17px; } .pagination { padding: 13px 13px; font-size: 11px; } .pagination-range { display: none; } .pagination > div { gap: 0; } .pagination .button { font-size: 11px; min-width: 48px; padding: 0 6px; } .page-note { padding: 0 3px; font-size: 11px; } .delivery-record { padding: 21px 17px; gap: 10px; flex-wrap: wrap; } .delivery-record > .delivery-symbol { width: 29px; height: 29px; } .delivery-record-heading { gap: 8px; flex-wrap: wrap; } .delivery-record-heading h2 { font-size: 14px; } .delivery-content { min-width: calc(100% - 40px); } .delivery-content > p { font-size: 12px; } .delivery-meta { font-size: 10px; gap: 6px 13px; } .delivery-record > .button { margin-left: 39px; height: 29px; } .delivery-error { font-size: 11px; padding: 8px 10px; } .delivery-policy { margin-top: 3px; } .delivery-policy p { font-size: 11px; } .task-dialog { max-height: calc(100dvh - 20px); } .editor-header { padding: 17px 20px 0; } .editor-header .modal__heading { font-size: 21px; } .editor-body { padding: 22px 20px; gap: 19px; } .editor-footer { padding: 15px 20px; } .editor-footer > span { display: none; } .editor-footer .button { font-size: 13px; } .form-grid { grid-template-columns: 1fr; gap: 17px; } .form-section-label > span { font-size: 10px; } .preview-title code { font-size: 10px; } .schedule-preview li { font-size: 12px; } .count-field p { min-width: 100%; margin-top: -2px; } .limit-header .field-hint { font-size: 10px; } .settings-aside { display: flex; } .notification-preview { width: 100%; } .settings-card > .section-top, .settings-fields { padding-left: 21px; padding-right: 21px; } .settings-actions { flex-wrap: wrap; padding: 17px 20px; } .settings-actions > span { font-size: 10px; } .test-card { padding: 21px; gap: 11px; flex-wrap: wrap; } .test-card > .settings-symbol { width: 34px; height: 34px; } .test-card > div { min-width: calc(100% - 50px); } .test-card > .button { margin-left: 45px; font-size: 12px; } .settings-grid { gap: 22px; } .settings-help { padding: 0 7px; } .storage-note { padding: 0 7px; } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; scroll-behavior: auto !important; transition: none !important; } }
+
+.overview-bottom-grid { display: grid; grid-template-columns: minmax(260px, 1fr) minmax(0, 1.85fr); gap: 24px; align-items: start; }
+.forecast-overflow { font-size: 13px; line-height: 1.8; color: var(--muted); padding-top: 14px; }
+.hero-grid { grid-template-columns: 1fr; }
+.welcome-panel { display: none; }
+.next-panel { min-height: 0; }
+.next-time { margin-top: 12px; font-size: 36px; }
+.next-task { margin-top: 14px; }
+.management-card { padding: 24px; gap: 16px; }
+.management-card h2 { font-size: 16px; font-weight: 650; }
+.management-card p { font-size: 13px; line-height: 1.8; color: var(--muted); }
+.management-form, .management-form fieldset { display: grid; gap: 16px; min-width: 0; }
+.management-form fieldset { border: 0; padding: 0; }
+.management-actions, .bulk-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.bulk-toolbar { padding: 16px 20px; border-bottom: 1px solid var(--separator); font-size: 13px; }
+.bulk-toolbar > .input { flex: 1; min-width: 180px; }
+.management-list { display: grid; gap: 8px; }
+.management-list > div { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding: 12px 0; border-bottom: 1px solid var(--separator); font-size: 13px; }
+.management-list > div > span { flex: 1; min-width: 0; }
+.management-list strong, .management-list small { display: block; overflow-wrap: anywhere; }
+.management-list small { color: var(--muted); margin-top: 5px; }
+.audit-list { max-height: 300px; overflow: auto; display: grid; gap: 12px; font-size: 12px; }
+.audit-list > div { display: flex; flex-wrap: wrap; gap: 8px; overflow-wrap: anywhere; }
+.notification-sample { padding: 18px; background: var(--surface-secondary); border-radius: 14px; overflow-wrap: anywhere; display: grid; gap: 8px; }
+.notification-sample small { color: var(--muted); }
+@media (max-width: 760px) {
+  .task-table th:nth-child(2), .task-table td:nth-child(2) { display: table-cell; }
+  .task-table th:nth-child(3), .task-table td:nth-child(3) { display: none; }
+}
+@media (max-width: 540px) {
+  .task-table tr { grid-template-columns: 24px minmax(0, 1fr) auto; }
+  .task-table td:first-child { grid-column: 1; grid-row: 1; }
+  .task-table td:nth-child(2) { grid-column: 2; grid-row: 1; display: block; }
+  .task-table td:nth-child(3) { display: none; }
+  .task-table td:nth-child(4) { grid-column: 2; grid-row: 2; padding-left: 0 !important; }
+  .task-table td:nth-child(5) { grid-column: 2; grid-row: 3; }
+  .task-table td:nth-child(6) { grid-column: 3; grid-row: 1; }
+  .task-table td:nth-child(7) { grid-column: 3; grid-row: 2 / 4; }
+  .task-table td:nth-child(4)::before { content: none; }
+  .management-card { padding: 20px; }
+  .delivery-content { min-width: 0; flex-basis: calc(100% - 40px); }
+}
+.delivery-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.attempt-history { padding: 12px 0; font-size: 13px; color: var(--muted); }
+.attempt-history ol { padding-left: 20px; display: grid; gap: 12px; margin: 0 0 12px; }
+.attempt-history time { margin-left: 12px; }
+.attempt-history p { line-height: 1.8; overflow-wrap: anywhere; }
+.filter-tabs .tabs__list-container { overflow-x: auto; max-width: 100%; }
+.metric-card > div > span { white-space: normal; }
+.mini-label, .eyebrow, .cron-caption, .progress-caption, .delivery-meta, .field-hint,
+.upcoming-copy > small, .recent-row small, .recent-row time, .metric-card > div > span,
+.week-strip button small, .activity-column > span, .settings-actions > span, .storage-note p,
+.storage-note code, .page-note, .delivery-policy p, .account-label small { font-size: 12px; }
+@media (max-width: 760px) {
+  .welcome-panel { display: none; }
+  .next-panel { display: flex; min-height: 210px; }
+  .overview-bottom-grid { grid-template-columns: 1fr; }
+}
+@media (max-width: 540px) {
+  .delivery-actions { margin-left: 39px; }
+  .week-strip button small { font-size: 12px; }
+  .task-table td:nth-child(4) { flex-wrap: wrap; }
+  .metric-card > div > span, .progress-caption, .delivery-meta, .upcoming-copy small,
+  .recent-row small, .task-name-cell p, .next-run-cell, .settings-actions > span,
+  .storage-note p, .storage-note code, .page-note, .delivery-policy p, .delivery-error,
+  .task-error, .pagination, .pagination .button, .workspace-footer { font-size: 12px; }
+}

@@ -1,25 +1,30 @@
 import { NextResponse } from "next/server";
 import { requestIsAuthorized } from "@/lib/auth";
-import { dashboardStats, deliverySummary, listDeliveries, listTasks, readSettings } from "@/lib/db";
-import { jsonError } from "@/lib/http";
-import { upcomingWeek } from "@/lib/cron";
+import { activeScheduleTasks, dashboardStats, deliverySummary, getTask, listDeliveries, readSettings } from "@/lib/db";
+import { apiRoute, jsonError } from "@/lib/http";
+import { upcomingWeekDetails } from "@/lib/cron";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function GET(request: Request): Promise<NextResponse> {
+export const GET = apiRoute(async (request: Request): Promise<NextResponse> => {
   if (!requestIsAuthorized(request)) return jsonError("未授权", 401);
-  const { deviceKey, endpoint } = readSettings();
-  const tasks = listTasks().filter((task) => task.status !== "archived");
+  const { deviceKey, endpoint, displayTimeZone } = readSettings();
   const now = new Date();
+  const forecast = upcomingWeekDetails(activeScheduleTasks(), now, { timeZone: displayTimeZone });
+  const ids = new Set(forecast.upcoming.map((item) => item.taskId));
+  const next = activeScheduleTasks().next().value;
+  if (next) ids.add(next.id);
+  const tasks = [...ids].map(getTask).filter(Boolean);
   return NextResponse.json({
     tasks,
-    upcoming: upcomingWeek(tasks, now),
+    ...forecast,
+    displayTimeZone,
     endpoint,
     deviceKeyConfigured: Boolean(deviceKey),
     deliveries: deliverySummary(),
-    ...dashboardStats(now),
+    ...dashboardStats(now, displayTimeZone),
     recent: listDeliveries({ page: 1, pageSize: 5 }).deliveries,
     serverTime: now.toISOString(),
   });
-}
+});

@@ -2,12 +2,12 @@ import { NextResponse } from "next/server";
 import { requestIsAuthorized } from "@/lib/auth";
 import { previewSchedule } from "@/lib/cron";
 import { previewTaskUpdate } from "@/lib/db";
-import { jsonError, jsonErrorFrom, jsonObjectBody, requestBody, requireSameOriginMutation, validationMessage } from "@/lib/http";
+import { apiRoute, jsonError, jsonErrorFrom, jsonObjectBody, requestBody, requireSameOriginMutation, validationMessage } from "@/lib/http";
 import { taskInputSchema } from "@/lib/validation";
 
 export const runtime = "nodejs";
 
-export async function POST(request: Request): Promise<NextResponse> {
+export const POST = apiRoute(async (request: Request): Promise<NextResponse> => {
   if (!requestIsAuthorized(request)) return jsonError("未授权", 401);
   const blocked = requireSameOriginMutation(request);
   if (blocked) return blocked;
@@ -24,4 +24,4 @@ export async function POST(request: Request): Promise<NextResponse> {
   } catch (error) {
     return jsonErrorFrom(error);
   }
-}
+});

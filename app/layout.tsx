@@ -6,7 +6,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: { default: "Barker · 让重要的事，如约而至", template: "%s · Barker" },
-  description: "一个安静、可靠的 Bark 提醒工作空间。安排周期任务，追踪每次投递，失败持续重试。",
+  description: "一个持久记录投递状态的 Bark 提醒工作空间。安排周期任务，追踪每次尝试并按策略重试。",
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {

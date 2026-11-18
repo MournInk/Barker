@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { localDateString, nextCronDate, presetCron, upcomingWeek, validateCron } from "../lib/cron";
+import { localDateString, nextCronDate, presetCron, upcomingWeek, upcomingWeekDetails, validateCron } from "../lib/cron";
 import type { Task } from "../lib/types";
 import { Cron } from "croner";
 
@@ -72,5 +72,54 @@ test("day-based agenda matches Croner for calendar modifiers, sparse times, and 
       cursor = schedule.nextRun(cursor);
     }
     assert.deepEqual(upcomingWeek([task], now), expected, expression);
+  }
+});
+
+test("agenda reports hidden occurrences instead of silently dropping them", () => {
+  const task = {
+    id: "busy", cron: "0 9,10,11,12,13 * * *", status: "active", nextRunAt: "2030-11-03T01:00:00Z",
+    queuedCount: 0, repeatCount: 100, endDate: null, timeZone: "Asia/Shanghai",
+  } as Task;
+  const details = upcomingWeekDetails([task], new Date("2030-11-03T00:00:00Z"));
+  assert.equal(details.upcoming.filter((item) => localDateString(new Date(item.occurrenceAt)) === "2030-11-03").length, 4);
+  assert.equal(details.upcomingDays[0].total, 5);
+  assert.equal(details.upcomingDays[0].hidden, 1);
+});
+
+test("per-task timezones use local wall clock without changing the global Shanghai date", () => {
+  const task = {
+    id: "utc", cron: "0 15 * * *", status: "active", nextRunAt: "2030-11-03T15:00:00Z",
+    queuedCount: 0, repeatCount: 4, endDate: null, timeZone: "UTC",
+  } as Task;
+  assert.equal(localDateString(new Date(task.nextRunAt!), task.timeZone), "2030-11-03");
+  assert.equal(upcomingWeek([task], new Date("2030-11-03T00:00:00Z"))[0].occurrenceAt, new Date(task.nextRunAt!).toISOString());
+});
+
+test("minute forecasts remain bounded for timezones other than Shanghai", (context) => {
+  const next = context.mock.method(Cron.prototype, "nextRun");
+  const now = new Date("2030-11-03T00:00:00Z");
+  const task = { id: "utc-minute", status: "active", cron: "* * * * *", nextRunAt: now.toISOString(), repeatCount: 100_000, queuedCount: 0, endDate: null, timeZone: "UTC" } as Task;
+  const details = upcomingWeekDetails([task], now);
+  assert.equal(details.upcoming.length, 28);
+  assert.equal(details.upcomingDays[0].total, 16 * 60);
+  assert.ok(next.mock.callCount() <= 10);
+});
+
+test("forecast counts follow Croner across daylight-saving gaps and overlaps", () => {
+  for (const now of [new Date("2026-03-08T00:00:00Z"), new Date("2026-11-01T00:00:00Z")]) {
+    const cron = "0,30 0-4 * * *";
+    const schedule = new Cron(cron, { timezone: "America/New_York" });
+    const next = schedule.nextRun(new Date(now.getTime() - 1))!;
+    const task = { id: "dst", status: "active", cron, nextRunAt: next.toISOString(), repeatCount: 100, queuedCount: 0, endDate: null, timeZone: "America/New_York" } as Task;
+    const details = upcomingWeekDetails([task], now);
+    const end = new Date(`${localDateString(now)}T00:00:00+08:00`).getTime() + 7 * 86_400_000;
+    const expected = new Map<string, number>();
+    let cursor: Date | null = next;
+    for (let count = 0; cursor && cursor.getTime() < end && count < 100; count += 1) {
+      const date = localDateString(cursor);
+      expected.set(date, (expected.get(date) ?? 0) + 1);
+      cursor = schedule.nextRun(cursor);
+    }
+    assert.deepEqual(details.upcomingDays.map((day) => day.total), details.upcomingDays.map((day) => expected.get(day.date) ?? 0));
   }
 });

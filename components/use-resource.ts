@@ -2,29 +2,26 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, errorMessage } from "@/lib/ui";
+import { createResourcePoller } from "@/lib/resource";
 
 /** Keep stale data visible on a network failure; discard late responses after navigation. */
 export function useResource<T>(url: string, poll = 5000) {
   const [state, setState] = useState<{ url: string; data: T | null; error: string }>({ url, data: null, error: "" });
-  const generation = useRef(0);
+  const poller = useRef<{ url: string; refresh: () => Promise<void> } | null>(null);
   const refresh = useCallback(async () => {
-    const current = ++generation.current;
-    try {
-      const data = await api<T>(url);
-      if (current === generation.current) setState({ url, data, error: "" });
-    } catch (error) {
-      if (current === generation.current) {
-        setState((previous) => ({ url, data: previous.url === url ? previous.data : null, error: errorMessage(error) }));
-      }
-    }
+    if (poller.current?.url === url) await poller.current.refresh();
   }, [url]);
   useEffect(() => {
-    void refresh();
-    const timer = poll ? setInterval(() => { if (!document.hidden) void refresh(); }, poll) : null;
-    const onFocus = () => { void refresh(); };
+    const resource = createResourcePoller<T>({ load: (signal) => api<T>(url, { signal }), interval: poll, visible: () => !document.hidden,
+      data: (data) => setState({ url, data, error: "" }),
+      error: (error) => setState((previous) => ({ url, data: previous.url === url ? previous.data : null, error: errorMessage(error) })) });
+    poller.current = { url, refresh: resource.refresh };
+    void resource.refresh();
+    const onFocus = () => { if (!document.hidden) void resource.refresh(); };
     window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onFocus);
     window.addEventListener("barker:tasks-changed", onFocus);
-    return () => { generation.current += 1; if (timer) clearInterval(timer); window.removeEventListener("focus", onFocus); window.removeEventListener("barker:tasks-changed", onFocus); };
-  }, [refresh, poll]);
+    return () => { resource.stop(); window.removeEventListener("focus", onFocus); document.removeEventListener("visibilitychange", onFocus); window.removeEventListener("barker:tasks-changed", onFocus); };
+  }, [url, poll]);
   return { data: state.url === url ? state.data : null, error: state.url === url ? state.error : "", refresh };
 }
