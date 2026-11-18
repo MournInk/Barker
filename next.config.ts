@@ -1,7 +1,25 @@
 import type { NextConfig } from "next";
 
+const contentSecurityPolicy = [
+  "default-src 'self'",
+  "script-src 'self' 'unsafe-inline'" + (process.env.NODE_ENV === "development" ? " 'unsafe-eval'" : ""),
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: blob:",
+  "font-src 'self'",
+  "connect-src 'self'" + (process.env.NODE_ENV === "development" ? " ws: wss:" : ""),
+  "worker-src 'self' blob:",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+  "frame-ancestors 'none'",
+].join("; ");
+
 const nextConfig: NextConfig = {
   output: "standalone",
+  // Runtime volumes and local credentials must never become standalone assets.
+  outputFileTracingExcludes: {
+    "/*": ["./data/**/*", "./.env*", "**/barker.sqlite*", "**/access-password.txt", "**/session-secret.txt"],
+  },
   poweredByHeader: false,
   turbopack: {},
   async headers() {
@@ -11,13 +29,14 @@ const nextConfig: NextConfig = {
         headers: [
           { key: "X-Content-Type-Options", value: "nosniff" },
           { key: "X-Frame-Options", value: "DENY" },
+          { key: "Content-Security-Policy", value: contentSecurityPolicy },
           { key: "Referrer-Policy", value: "no-referrer" },
           { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=()" },
         ],
       },
       {
-        // Task/settings/overview responses contain live state and are re-fetched
-        // every 5s; never let a proxy or browser reuse them.
+        // Workspace responses contain live delivery state and are polled at
+        // different cadences; never let a proxy or browser reuse them.
         source: "/api/:path*",
         headers: [{ key: "Cache-Control", value: "no-store" }],
       },

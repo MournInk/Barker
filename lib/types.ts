@@ -1,4 +1,7 @@
-export type RecurrencePreset = "daily" | "weekly" | "monthly" | "custom";
+import type { z } from "zod";
+import type { deliverySchema, settingsFields, taskFields, taskSchema } from "./contracts";
+
+export type RecurrencePreset = TaskInput["preset"];
 
 /**
  * Single source of truth for the scheduler wall clock. Kept in this dependency-free
@@ -7,51 +10,45 @@ export type RecurrencePreset = "daily" | "weekly" | "monthly" | "custom";
  */
 export const SCHEDULE_TIME_ZONE = "Asia/Shanghai";
 
-export type TaskStatus = "active" | "paused" | "completed";
+export type TaskStatus = "active" | "paused" | "completed" | "archived";
 
-export interface Task {
+export type Task = z.output<typeof taskSchema>;
+
+export type BarkSettings = Omit<z.output<typeof settingsFields>, "displayTimeZone"> & { displayTimeZone?: string };
+
+export type TaskInput = z.input<typeof taskFields>;
+
+export type DeliveryStatus = "pending" | "sending" | "sent" | "cancelled" | "expired";
+export type DeliveryFilter = DeliveryStatus | "retrying";
+
+export type Delivery = z.output<typeof deliverySchema>;
+
+export interface DeliveryAttempt {
   id: string;
-  name: string;
-  description: string;
-  startsAt: string;
-  preset: RecurrencePreset;
-  cron: string;
-  repeatCount: number | null;
-  endDate: string | null;
-  sentCount: number;
-  nextRunAt: string | null;
-  lastRunAt: string | null;
-  lastError: string | null;
-  status: TaskStatus;
-  createdAt: string;
-  updatedAt: string;
+  deliveryId: string;
+  startedAt: string;
+  finishedAt: string | null;
+  outcome: "sending" | "sent" | "failed" | "interrupted";
+  error: string | null;
 }
 
-export interface BarkSettings {
-  endpoint: string;
-  deviceKey: string;
-  title: string;
-  sound: string;
-  group: string;
-  icon: string;
-}
-
-export interface StoreData {
-  settings: BarkSettings;
+export interface Dashboard {
+  displayTimeZone?: string;
+  taskTotal?: number;
   tasks: Task[];
-}
-
-export interface TaskInput {
-  name: string;
-  description?: string;
-  startsAt: string;
-  preset: RecurrencePreset;
-  cron: string;
-  repeatCount?: number | null;
-  endDate?: string | null;
+  upcoming: Array<{ taskId: string; occurrenceAt: string }>;
+  upcomingDays: Array<{ date: string; total: number; hidden: number }>;
+  deviceKeyConfigured: boolean;
+  endpoint: string;
+  deliveries: { pending: number; retrying: number; nextRetryAt: string | null };
+  stats: { active: number; paused: number; todaySent: number; totalSent: number };
+  activity: Array<{ date: string; sent: number }>;
+  recent: Delivery[];
+  serverTime: string;
 }
 
 export const DEFAULT_SETTINGS: BarkSettings = {
+  displayTimeZone: SCHEDULE_TIME_ZONE,
   endpoint: "https://api.day.app",
   deviceKey: "",
   title: "Barker 提醒",
@@ -59,3 +56,17 @@ export const DEFAULT_SETTINGS: BarkSettings = {
   group: "Barker",
   icon: "",
 };
+
+export interface NotificationOptions {
+  sound?: string;
+  group?: string;
+  icon?: string;
+}
+
+export interface Device {
+  id: string;
+  name: string;
+  endpoint: string;
+  deviceKeyConfigured: boolean;
+  revision: number;
+}

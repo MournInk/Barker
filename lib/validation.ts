@@ -1,91 +1,28 @@
 import { z } from "zod";
 import { presetCron, validateCron } from "./cron";
+import { settingsFields, taskFields, timeZoneSchema } from "./contracts";
 
-const CONTROL_CHARS = /[\u0000-\u001f\u007f]/;
-const isoDateTime = z.string().datetime({ offset: true }).max(64);
-
-function isHttpUrl(value: string): boolean {
-  try {
-    const url = new URL(value);
-    return (url.protocol === "http:" || url.protocol === "https:") && Boolean(url.hostname);
-  } catch {
-    return false;
+export const taskInputSchema = taskFields.superRefine((value, context) => {
+  const start = new Date(value.startsAt);
+  const validStart = Number.isFinite(start.getTime());
+  if (!validStart) context.addIssue({ code: "custom", path: ["startsAt"], message: "开始时间无效" });
+  if (!validateCron(value.cron, value.timeZone)) {
+    context.addIssue({ code: "custom", path: ["cron"], message: "Cron 表达式无效，请使用标准五段格式" });
+  } else if (validStart && timeZoneSchema.safeParse(value.timeZone).success && value.preset !== "custom" && value.cron !== presetCron(value.preset, start, value.timeZone)) {
+    context.addIssue({ code: "custom", path: ["cron"], message: "预设周期与开始时间不匹配" });
   }
-}
+  if (value.repeatCount && value.endDate) context.addIssue({ code: "custom", path: ["repeatCount"], message: "重复次数与截止日期只能填写一项" });
+  if (value.preset === "once" && (value.repeatCount !== 1 || value.endDate)) context.addIssue({ code: "custom", path: ["repeatCount"], message: "一次性提醒必须只执行一次" });
+  if (value.skipDates.some((date) => value.includeDates.includes(date))) context.addIssue({ code: "custom", path: ["includeDates"], message: "同一日期不能同时跳过和补班" });
+  if (value.includeDates.length && value.preset !== "weekdays") context.addIssue({ code: "custom", path: ["includeDates"], message: "补班日期仅适用于周一至周五预设" });
+  if (new TextEncoder().encode(JSON.stringify({ title: value.name, body: value.description || "计划提醒时间已到。" })).byteLength > 3000) {
+    context.addIssue({ code: "custom", path: ["description"], message: "标题和正文合计不能超过 3000 个 UTF-8 字节，请缩短内容" });
+  }
+});
 
-export const taskInputSchema = z
-  .object({
-    name: z
-      .string()
-      .trim()
-      .min(1, "任务名称不能为空")
-      .max(80, "任务名称最多 80 个字符")
-      .refine((value) => !CONTROL_CHARS.test(value), "任务名称不能包含控制字符"),
-    description: z
-      .string()
-      .max(500, "解释最多 500 个字符")
-      .refine((value) => !CONTROL_CHARS.test(value), "解释不能包含控制字符")
-      .optional()
-      .default(""),
-    startsAt: isoDateTime,
-    preset: z.enum(["daily", "weekly", "monthly", "custom"]),
-    cron: z.string().trim().min(9, "请输入有效的 cron 表达式").max(80),
-    repeatCount: z.number().int().positive("重复次数必须为正整数").max(100_000, "重复次数过大").nullable().optional(),
-    endDate: z.string().date().nullable().optional(),
-  })
-  .superRefine((value, context) => {
-    // A regex-valid but impossible date (month 13, Feb 31, +08:00:30 …) parses to
-    // an Invalid Date; Intl/cron would throw a RangeError and escape zod as a 500.
-    const start = new Date(value.startsAt);
-    const startIsValid = !Number.isNaN(start.getTime());
-    if (!startIsValid) {
-      context.addIssue({ code: "custom", path: ["startsAt"], message: "开始时间无效" });
-    }
-    if (!validateCron(value.cron)) {
-      context.addIssue({ code: "custom", path: ["cron"], message: "Cron 表达式无效，请使用标准五段格式" });
-    } else if (startIsValid && value.preset !== "custom" && value.cron !== presetCron(value.preset, start)) {
-      context.addIssue({ code: "custom", path: ["cron"], message: "预设周期与开始时间不匹配" });
-    }
-    if (value.repeatCount && value.endDate) {
-      context.addIssue({ code: "custom", path: ["repeatCount"], message: "重复次数与截止日期只能填写一项" });
-    }
-    if (!value.repeatCount && !value.endDate) {
-      context.addIssue({ code: "custom", path: ["repeatCount"], message: "请填写重复次数或截止日期" });
-    }
-  });
-
-export const settingsSchema = z.object({
-  endpoint: z
-    .string()
-    .trim()
-    .min(1, "请输入完整的 Bark API 地址")
-    .max(300)
-    .refine((value) => {
-      try {
-        const url = new URL(value);
-        // Query strings and fragments would be swallowed by `${endpoint}/push`
-        // and silently misroute every push, so reject them here.
-        return (
-          ["http:", "https:"].includes(url.protocol) &&
-          Boolean(url.hostname) &&
-          !url.username &&
-          !url.password &&
-          !url.search &&
-          !url.hash
-        );
-      } catch {
-        return false;
-      }
-    }, "Bark API 地址必须是不含用户名、密码、查询串与锚点的 HTTP(S) 地址"),
-  deviceKey: z.string().trim().max(300).optional().default(""),
-  title: z.string().trim().min(1).max(100),
-  sound: z.string().trim().max(80),
-  group: z.string().trim().max(100),
-  icon: z
-    .string()
-    .trim()
-    .max(300, "图标 URL 过长")
-    .refine((value) => value === "" || isHttpUrl(value), "图标必须是 HTTP(S) URL"),
+export const settingsSchema = settingsFields.superRefine((value, context) => {
+  const options = JSON.stringify({ device_key: value.deviceKey, sound: value.sound || undefined, group: value.group || undefined, icon: value.icon || undefined });
+  if (new TextEncoder().encode(options).byteLength > 1096) context.addIssue({ code: "custom", path: ["deviceKey"], message: "密钥与通知选项合计过长，请缩短分组、提示音或图标地址，为通知正文保留空间" });
 });
 
 export type ValidatedTaskInput = z.infer<typeof taskInputSchema>;
