@@ -111,7 +111,7 @@ test("HTTP throttling is honored without waiting for its response body", async (
     (error: unknown) => error instanceof BarkDeliveryError && error.status === 429 && Boolean(error.retryAt));
 });
 
-test("application-level 503 is transient and payload rejection does not cool down other messages", async () => {
+test("application-level 503 is transient and HTTP 413 is scoped to the payload", async () => {
   await assert.rejects(sendBark({ ...DEFAULT_SETTINGS, deviceKey: "key" }, "T", "B", async () => Response.json({ code: 503 })),
     (error: unknown) => error instanceof BarkDeliveryError && error.kind === "transient");
   await assert.rejects(sendBark({ ...DEFAULT_SETTINGS, deviceKey: "key" }, "T", "B", async () => new Response("", { status: 413 })),

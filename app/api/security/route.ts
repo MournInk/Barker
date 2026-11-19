@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { changePassword, clientKeyFor, createApiToken, createSessionToken, getCookieValue, isValidSessionToken, requestUsesHttps, setSessionCookie } from "@/lib/auth";
+import { changePassword, clientKeyFor, createApiToken, createSessionToken, getCookieValue, isValidSessionToken, loginRetryAfter, requestUsesHttps, setSessionCookie } from "@/lib/auth";
 import { revokeCredential, securityState } from "@/lib/db";
+import { DomainError } from "@/lib/errors";
 import { apiRoute, jsonError, requestBody, requireSameOriginMutation, validationMessage } from "@/lib/http";
 
 export const runtime = "nodejs";
@@ -25,7 +26,15 @@ export const POST = apiRoute(async (request: Request) => {
   if (!result.success) return jsonError(validationMessage(result.error), 400);
   const data = result.data;
   if (data.action === "password") {
-    changePassword(data.current, data.next, clientKeyFor(request));
+    const clientKey = clientKeyFor(request);
+    try {
+      changePassword(data.current, data.next, clientKey);
+    } catch (error) {
+      if (!(error instanceof DomainError) || error.status !== 429) throw error;
+      const response = jsonError(error.message, error.status);
+      response.headers.set("retry-after", String(loginRetryAfter(clientKey)));
+      return response;
+    }
     const response = NextResponse.json({ saved: true });
     response.headers.set("set-cookie", setSessionCookie(createSessionToken(), requestUsesHttps(request)));
     return response;

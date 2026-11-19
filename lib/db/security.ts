@@ -2,6 +2,10 @@ import { randomUUID } from "node:crypto";
 import { DomainError } from "../errors";
 import { statement, transaction } from "./core";
 
+const authState = globalThis as typeof globalThis & { barkerPasswordRevision?: number };
+
+export function passwordRevision(): number { return authState.barkerPasswordRevision ?? 0; }
+
 export function auditEvent(action: string, target: string): void {
   statement("INSERT INTO audit_events (id, action, target, created_at) VALUES (?, ?, ?, ?)").run(randomUUID(), action, target, new Date().toISOString());
   statement("DELETE FROM audit_events WHERE id IN (SELECT id FROM audit_events ORDER BY created_at DESC LIMIT -1 OFFSET 10000)").run();
@@ -46,6 +50,7 @@ export function savePasswordOverride(value: string): void {
     statement("DELETE FROM api_tokens").run();
     auditEvent("security.password.change", "all-sessions-and-tokens");
   });
+  authState.barkerPasswordRevision = passwordRevision() + 1;
 }
 
 export function saveApiToken(id: string, name: string, digest: string, scope: string, expiresAt: number): void {

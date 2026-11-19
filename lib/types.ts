@@ -10,9 +10,23 @@ export type RecurrencePreset = TaskInput["preset"];
  */
 export const SCHEDULE_TIME_ZONE = "Asia/Shanghai";
 
+export function presetCronFromParts(preset: RecurrencePreset, { hour, minute, day, weekday }: { hour: number; minute: number; day: number; weekday: number }): string {
+  switch (preset) {
+    case "once":
+    case "daily": return `${minute} ${hour} * * *`;
+    case "weekdays": return `${minute} ${hour} * * 1-5`;
+    case "weekly": return `${minute} ${hour} * * ${weekday}`;
+    case "monthly": return `${minute} ${hour} ${day} * *`;
+    case "custom": return "";
+  }
+}
+
 export type TaskStatus = "active" | "paused" | "completed" | "archived";
 
 export type Task = z.output<typeof taskSchema>;
+
+export type ScheduledTask = Pick<Task, "id" | "name" | "status" | "preset" | "cron" | "timeZone" | "nextRunAt" | "pausedAt"
+  | "endDate" | "repeatCount" | "queuedCount" | "skipDates" | "includeDates">;
 
 export type BarkSettings = Omit<z.output<typeof settingsFields>, "displayTimeZone"> & { displayTimeZone?: string };
 
@@ -33,6 +47,7 @@ export interface DeliveryAttempt {
 }
 
 export interface Dashboard {
+  forecastTruncated?: boolean;
   displayTimeZone?: string;
   taskTotal?: number;
   tasks: Task[];

@@ -1,12 +1,12 @@
 import { Cron, CronPattern } from "croner";
-import { SCHEDULE_TIME_ZONE } from "./types";
-import type { RecurrencePreset, Task, TaskInput } from "./types";
+import { presetCronFromParts, SCHEDULE_TIME_ZONE } from "./types";
+import type { RecurrencePreset, ScheduledTask, Task, TaskInput } from "./types";
 
 export { SCHEDULE_TIME_ZONE };
 
 const formatters = new Map<string, Intl.DateTimeFormat>();
 
-function scheduleParts(date: Date, timeZone = SCHEDULE_TIME_ZONE): Record<string, number> {
+function scheduleParts(date: Date, timeZone = SCHEDULE_TIME_ZONE) {
   let formatter = formatters.get(timeZone);
   if (!formatter) {
     formatter = new Intl.DateTimeFormat("en-US", {
@@ -52,12 +52,8 @@ export function nextCronDate(expression: string, from: Date, timeZone = SCHEDULE
 }
 
 export function presetCron(preset: RecurrencePreset, startsAt: Date, timeZone = SCHEDULE_TIME_ZONE): string {
-  const { minute, hour, day, weekday } = scheduleParts(startsAt, timeZone);
-  if (preset === "daily" || preset === "once") return `${minute} ${hour} * * *`;
-  if (preset === "weekdays") return `${minute} ${hour} * * 1-5`;
-  if (preset === "weekly") return `${minute} ${hour} * * ${weekday}`;
-  if (preset === "monthly") return `${minute} ${hour} ${day} * *`;
-  throw new Error("Custom schedules require an explicit cron expression");
+  if (preset === "custom") throw new Error("Custom schedules require an explicit cron expression");
+  return presetCronFromParts(preset, scheduleParts(startsAt, timeZone));
 }
 
 export function localDateString(date: Date, timeZone = SCHEDULE_TIME_ZONE): string {
@@ -140,30 +136,51 @@ function lowerBound(values: number[], target: number): number {
   return left;
 }
 
-export function upcomingWeekDetails(tasks: Iterable<Task>, now = new Date(), options: { timeZone?: string; perDay?: number; after?: { time: string; taskId: string } } = {}): {
+export const FORECAST_BUDGET_MS = 150;
+
+export function upcomingWeekDetails(tasks: Iterable<ScheduledTask>, now = new Date(), options: {
+  timeZone?: string;
+  perDay?: number;
+  after?: { time: string; taskId: string };
+  deadline?: number;
+  onTaskError?: (error: unknown, taskId: string) => void;
+} = {}): {
   upcoming: Array<{ taskId: string; occurrenceAt: string }>;
   upcomingDays: Array<{ date: string; total: number; hidden: number }>;
+  forecastTruncated: boolean;
 } {
   const dayLength = 86_400_000;
   const nowTime = now.getTime();
   const calendar = calendarDays(now, options.timeZone);
   const end = calendar[6].end;
   const maximum = options.perDay ?? 4;
+  const after = options.after && { time: Date.parse(options.after.time), taskId: options.after.taskId };
+  const deadline = options.deadline ?? Infinity;
+  let forecastTruncated = false;
   const days: Array<Array<{ taskId: string; occurrenceAt: string }>> = Array.from({ length: 7 }, () => []);
   const totals = Array<number>(7).fill(0);
   const add = (taskId: string, time: number) => {
     const day = calendar.findIndex((day) => time >= day.start && time < day.end);
     if (time < nowTime || day < 0) return;
-    if (options.after && (time < Date.parse(options.after.time) || (time === Date.parse(options.after.time) && taskId <= options.after.taskId))) return;
+    if (after && (time < after.time || (time === after.time && taskId <= after.taskId))) return;
     const items = days[day];
-    if (items.length >= maximum && items.at(-1)!.occurrenceAt < new Date(time).toISOString()) return;
-    items.push({ taskId, occurrenceAt: new Date(time).toISOString() });
+    const occurrenceAt = new Date(time).toISOString();
+    if (items.length >= maximum && items.at(-1)!.occurrenceAt < occurrenceAt) return;
+    items.push({ taskId, occurrenceAt });
     items.sort((left, right) => left.occurrenceAt.localeCompare(right.occurrenceAt) || left.taskId.localeCompare(right.taskId));
     if (items.length > maximum) items.pop();
   };
-  for (const task of tasks) {
+  const hasTime = () => {
+    if (performance.now() < deadline) return true;
+    forecastTruncated = true;
+    return false;
+  };
+  forecast: for (const task of tasks) {
+    if (!hasTime()) break;
     if (task.status !== "active" || !task.nextRunAt || task.pausedAt) continue;
     try {
+    let cursor: Date | null = new Date(task.nextRunAt);
+    if (cursor.getTime() >= end) continue;
     const zone = task.timeZone ?? SCHEDULE_TIME_ZONE;
     const schedule = cronSchedule(task.cron, zone);
     const pattern = new CronPattern(task.cron, zone, { mode: "5-part" });
@@ -174,10 +191,10 @@ export function upcomingWeekDetails(tasks: Iterable<Task>, now = new Date(), opt
         if (pattern.minute[minute]) slots.push((hour * 60 + minute) * 60_000);
       }
     }
-    let cursor: Date | null = new Date(task.nextRunAt);
     let remaining = task.repeatCount === null ? Infinity : Math.max(0, task.repeatCount - task.queuedCount);
     if (remaining === Infinity && cursor.getTime() < nowTime) cursor = nextTaskDate(task, new Date(nowTime - 1));
     while (cursor && remaining > 0 && cursor.getTime() < end) {
+      if (!hasTime()) break forecast;
       const first = cursor.getTime();
       const parts = scheduleParts(cursor, zone);
       const date = localDateString(cursor, zone);
@@ -195,6 +212,7 @@ export function upcomingWeekDetails(tasks: Iterable<Task>, now = new Date(), opt
         if (beginning.day !== parts.day || beginning.hour !== 0 || beginning.minute !== 0
           || ending.day !== parts.day || ending.hour !== 23 || ending.minute !== 59) {
           while (cursor && cursor.getTime() < end && remaining > 0 && localDateString(cursor, zone) === date) {
+            if (!hasTime()) break forecast;
             const time = cursor.getTime();
             const day = calendar.findIndex((day) => time >= Math.max(nowTime, day.start) && time < day.end);
             if (day >= 0) { totals[day] += 1; add(task.id, time); }
@@ -209,17 +227,21 @@ export function upcomingWeekDetails(tasks: Iterable<Task>, now = new Date(), opt
         const begin = Math.max(firstSlot, lowerBound(slots, Math.max(nowTime, calendar[day].start) - midnight));
         const finish = Math.min(lastSlot, lowerBound(slots, calendar[day].end - midnight));
         totals[day] += Math.max(0, finish - begin);
-        const afterSlot = options.after ? lowerBound(slots, Date.parse(options.after.time) - midnight + (task.id <= options.after.taskId ? 1 : 0)) : begin;
+        const afterSlot = after ? lowerBound(slots, after.time - midnight + (task.id <= after.taskId ? 1 : 0)) : begin;
         for (let index = Math.max(begin, afterSlot); index < Math.min(finish, Math.max(begin, afterSlot) + maximum); index += 1) add(task.id, midnight + slots[index]);
       }
       remaining -= Math.max(0, lastSlot - firstSlot);
       cursor = task.includeDates?.length || task.skipDates?.length ? nextTaskDate(task, new Date(midnight + dayLength - 1)) : schedule.nextRun(new Date(midnight + dayLength - 1));
     }
-    } catch { continue; }
+    } catch (error) {
+      if (!options.onTaskError) throw error;
+      options.onTaskError(error, task.id);
+    }
   }
   return {
     upcoming: days.flat(),
     upcomingDays: totals.map((total, index) => ({ date: calendar[index].date, total, hidden: Math.max(0, total - days[index].length) })),
+    forecastTruncated,
   };
 }
 

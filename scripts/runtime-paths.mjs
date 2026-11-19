@@ -18,6 +18,6 @@ export function runtimeDirectory(directory = process.cwd(), configured = process
 export function checkLegacyData(directory = process.cwd()) {
   const legacy = resolve(directory, ".next/standalone/data/barker.sqlite");
   if (existsSync(legacy)) {
-    throw new Error(`Legacy runtime database found at ${legacy}. Stop the old server, back up that directory with data:backup, restore outside .next, then move the old data directory out of .next before building.`);
+    throw new Error(`Legacy runtime database found at ${legacy}. Stop the old server and run pnpm data:backup <new-backup-dir> .next/standalone/data, then pnpm data:restore <new-dir-outside-.next> <new-backup-dir> from the project root. Move the old data directory out of .next before building.`);
   }
 }

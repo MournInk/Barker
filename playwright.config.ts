@@ -3,6 +3,7 @@ import { defineConfig } from "@playwright/test";
 const port = process.env.BARKER_BROWSER_PORT || "3129";
 export default defineConfig({
   testDir: "./tests/browser",
+  forbidOnly: Boolean(process.env.CI),
   workers: 1,
   projects: [{ name: "chromium", use: { browserName: "chromium" } }, { name: "webkit", use: { browserName: "webkit" } }],
   timeout: 30_000,

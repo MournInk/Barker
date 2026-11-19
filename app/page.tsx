@@ -4,7 +4,7 @@ import { Button, Card, Chip } from "@heroui/react";
 import Link from "next/link";
 import { useState } from "react";
 import { Glyph, type IconName } from "@/components/icons";
-import { Empty, TaskBadge } from "@/components/primitives";
+import { Empty, Notice, TaskBadge } from "@/components/primitives";
 import { useWorkspace } from "@/components/workspace-context";
 import { localDateValue, PRESET_LABELS } from "@/lib/ui";
 import { useTime } from "@/components/use-time";
@@ -61,10 +61,21 @@ export default function OverviewPage() {
           <TaskBadge task={task} /><Glyph name="chevron" size={14} className="row-chevron" />
         </button>
       ))}</div>}
-      {hidden > 0 && <p className="forecast-overflow">{selectedDay ? "当天" : "七天内"}共 {total} 条，另有 {hidden} 条未展开。<Button size="sm" variant="ghost" onPress={() => setDetails(true)}>查看完整排期</Button></p>}
+      {dashboard?.forecastTruncated ? <Notice kind="info">待处理排期较多，当前仅显示部分预测。请稍后查看完整排期。</Notice> : hidden > 0 && <p className="forecast-overflow">{selectedDay ? "当天" : "七天内"}共 {total} 条，另有 {hidden} 条未展开。<Button size="sm" variant="ghost" onPress={() => setDetails(true)}>查看完整排期</Button></p>}
     </Card>
     <div className="overview-bottom-grid"><Card className="activity-panel"><div className="section-top"><h2>投递节奏</h2><span className="mini-label">最近 7 天</span></div><div className="activity-total"><strong>{dashboard?.activity.reduce((sum, day) => sum + day.sent, 0) ?? "—"}</strong><span>条 Bark 已接收</span></div><div className="activity-chart" role="img" aria-label={dashboard?.activity.map((day) => `${day.date}：${day.sent}条`).join("；") ?? "正在加载"}>{dashboard?.activity.map((day, index) => <div className="activity-column" key={day.date}><div className={`activity-bar ${index === 6 ? "today" : ""}`} style={{ height: `${Math.max(3, day.sent / maxActivity * 88)}px` }} title={`${day.date} · ${day.sent} 条`} /><span>{index === 6 ? "今天" : day.date.slice(5).replace("-", "/")}</span></div>)}</div></Card>
-      <Card className="recent-panel"><div className="section-top"><div><h2>最近投递</h2><p>按最近一次投递活动排序。</p></div><Link href="/deliveries" className="text-action">查看记录<Glyph name="arrow" size={15} /></Link></div>{dashboard?.recent.length ? <div className="recent-list">{dashboard.recent.map((item) => <div key={item.id} className="recent-row"><span className={`delivery-symbol ${item.status === "sent" ? "delivered" : item.status === "pending" && item.lastError ? "retrying" : ""}`}><Glyph name={item.status === "sent" ? "check" : "clock"} size={17} /></span><div><strong>{item.taskName}</strong><small>{item.status === "pending" && item.lastError ? "等待重试" : deliveryLabels[item.status]}</small></div><time dateTime={item.updatedAt}>{formatTime(item.updatedAt)}</time><Chip variant="soft" color={item.status === "sent" ? "success" : "default"} size="sm">{deliveryLabels[item.status]}</Chip></div>)}</div> : <div className="inline-empty"><Glyph name="inbox" size={20} /><p>{dashboard ? "暂无投递记录。" : dashboardError ? "暂时无法读取投递记录。" : "正在读取投递记录…"}</p></div>}</Card>
+      <Card className="recent-panel"><div className="section-top"><div><h2>最近投递</h2><p>按最近一次投递活动排序。</p></div><Link href="/deliveries" className="text-action">查看记录<Glyph name="arrow" size={15} /></Link></div>
+        {dashboard?.recent.length ? <div className="recent-list">{dashboard.recent.map((item) => {
+          const failed = item.status === "pending" && Boolean(item.lastError);
+          const label = failed ? item.manualOnly ? "等待人工处理" : "等待重试" : deliveryLabels[item.status];
+          return <div key={item.id} className="recent-row">
+            <span className={`delivery-symbol ${item.status === "sent" ? "delivered" : failed ? "retrying" : ""}`}><Glyph name={item.status === "sent" ? "check" : "clock"} size={17} /></span>
+            <div><strong>{item.taskName}</strong><small>{label}</small></div>
+            <time dateTime={item.updatedAt}>{formatTime(item.updatedAt)}</time>
+            <Chip variant="soft" color={item.status === "sent" ? "success" : failed ? "warning" : "default"} size="sm">{label}</Chip>
+          </div>;
+        })}</div> : <div className="inline-empty"><Glyph name="inbox" size={20} /><p>{dashboard ? "暂无投递记录。" : dashboardError ? "暂时无法读取投递记录。" : "正在读取投递记录…"}</p></div>}
+      </Card>
     </div>
     {details && <AgendaDetails date={selectedDay} onClose={() => setDetails(false)} />}
   </div>;

@@ -20,6 +20,10 @@ let health: typeof import("../app/api/health/route");
 let cancellation: typeof import("../app/api/deliveries/[id]/cancel/route");
 let attempts: typeof import("../app/api/deliveries/[id]/attempts/route");
 let deliveryRetry: typeof import("../app/api/deliveries/[id]/retry/route");
+let audit: typeof import("../app/api/audit/route");
+let devices: typeof import("../app/api/devices/route");
+let security: typeof import("../app/api/security/route");
+let upcoming: typeof import("../app/api/upcoming/route");
 before(async () => {
   auth = await import("../lib/auth"); tasks = await import("../app/api/tasks/route"); task = await import("../app/api/tasks/[id]/route");
   settings = await import("../app/api/settings/route"); deliveries = await import("../app/api/deliveries/route");
@@ -29,13 +33,15 @@ before(async () => {
   cancellation = await import("../app/api/deliveries/[id]/cancel/route");
   attempts = await import("../app/api/deliveries/[id]/attempts/route");
   deliveryRetry = await import("../app/api/deliveries/[id]/retry/route");
+  audit = await import("../app/api/audit/route"); devices = await import("../app/api/devices/route");
+  security = await import("../app/api/security/route"); upcoming = await import("../app/api/upcoming/route");
 });
 after(() => rmSync(directory, { recursive: true, force: true }));
 
 function request(path: string, method = "GET", body?: unknown, authorized = true, extraHeaders: Record<string, string> = {}) {
   return new Request(`http://localhost:3000${path}`, { method, headers: { host: "localhost:3000", "content-type": "application/json", ...(authorized ? { cookie: `barker_session=${auth.createSessionToken()}` } : {}), ...extraHeaders }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
 }
-const input = { name: "API reminder", description: "First line\nSecond line", startsAt: "2030-11-05T09:00:00+08:00", preset: "weekdays", cron: "0 9 * * 1-5", repeatCount: 3, endDate: null };
+const input = { name: "API reminder", description: "First line\nSecond line", startsAt: "2030-11-05T09:00:00+08:00", preset: "weekdays" as const, cron: "0 9 * * 1-5", repeatCount: 3, endDate: null };
 
 test("all workspace data endpoints reject unauthorized reads and mutations", async () => {
   for (const handler of [tasks.GET, settings.GET, deliveries.GET, overview.GET]) assert.equal((await handler(request("/api", "GET", undefined, false))).status, 401);
@@ -60,6 +66,9 @@ test("repeated wrong logins lock out further guesses including correct passwords
   assert.ok(Number(failed?.headers.get("retry-after")) > 0);
   const correct = await session.POST(request("/api/session", "POST", { password: "api-test-password-1234" }, false));
   assert.equal(correct.status, 429);
+  const change = await security.POST(request("/api/security", "POST", { action: "password", current: "api-test-password-1234", next: "new-api-test-password" }));
+  assert.equal(change.status, 429);
+  assert.ok(Number(change.headers.get("retry-after")) > 0);
 });
 
 test("settings roundtrip never returns the device key and empty edits preserve it", async () => {
@@ -74,7 +83,8 @@ test("settings roundtrip never returns the device key and empty edits preserve i
   assert.equal(payload.settings.deviceKey, undefined);
 });
 
-test("create, preview, pause, edit and archive form a complete authenticated workflow", async () => {
+test("create, preview, pause, edit and archive form a complete authenticated workflow", async (testContext) => {
+  testContext.mock.timers.enable({ apis: ["Date"], now: new Date(input.startsAt) });
   const previewResponse = await preview.POST(request("/api/tasks/preview", "POST", input));
   assert.equal(previewResponse.status, 200);
   const dates = (await previewResponse.json()).dates;
@@ -122,7 +132,8 @@ test("task mutation requires revisions and idempotent creation does not duplicat
   assert.equal((await task.PATCH(request(`/api/tasks/${entity.id}`, "PATCH", { status: "paused", revision: 999 }), context)).status, 409);
 });
 
-test("database write failures return 500 without leaking SQLite details", async () => {
+test("database write failures log once with a request ID and return a sanitized 500", async (context) => {
+  const logged = context.mock.method(console, "error", () => {});
   const raw = database.__rawDatabaseForTests();
   const authenticatedRequest = request("/api/tasks", "POST", input);
   raw.exec("PRAGMA query_only=ON");
@@ -130,6 +141,10 @@ test("database write failures return 500 without leaking SQLite details", async 
     const response = await tasks.POST(authenticatedRequest);
     assert.equal(response.status, 500);
     assert.doesNotMatch(JSON.stringify(await response.json()), /readonly|sqlite|SQLITE/i);
+    assert.equal(logged.mock.callCount(), 1);
+    const record = JSON.parse(String(logged.mock.calls[0].arguments[0]));
+    assert.equal(record.event, "api.failed");
+    assert.equal(record.requestId, response.headers.get("x-request-id"));
   } finally { raw.exec("PRAGMA query_only=OFF"); }
 });
 
@@ -139,6 +154,40 @@ test("invalid pagination, dates, limits, and nonexistent task IDs return errors"
   assert.equal((await tasks.POST(request("/api/tasks", "POST", { ...input, repeatCount: 0 }))).status, 400);
   assert.equal((await preview.POST(request("/api/tasks/preview", "POST", { ...input, endDate: "2020-01-01", repeatCount: null }))).status, 400);
   assert.equal((await task.DELETE(request("/api/tasks/missing", "DELETE"), { params: Promise.resolve({ id: "missing" }) })).status, 404);
+  assert.equal((await upcoming.GET(request("/api/upcoming?after=2030-11-05T01:00:00Z"))).status, 400);
+  assert.equal((await upcoming.GET(request("/api/upcoming?task=cursor-without-time"))).status, 400);
+  assert.equal((await upcoming.GET(request("/api/upcoming?task=invalid-date&after=2030-02-31T01:00:00Z"))).status, 400);
+});
+
+test("bulk status writes prevalidate the batch and roll back on storage errors", async () => {
+  const first = database.createTask({ ...input, name: "Atomic first" });
+  const second = database.createTask({ ...input, name: "Atomic second" });
+  const items = [first, second].map(({ id, revision }) => ({ id, revision }));
+  const patch = (status: unknown, batch: unknown[]) => tasks.PATCH(request("/api/tasks", "PATCH", { status, items: batch }));
+  assert.equal((await patch(["paused"], items)).status, 400);
+  assert.equal((await patch("paused", [items[0], null])).status, 400);
+  assert.equal(database.getTask(first.id)?.status, "active");
+  const raw = database.__rawDatabaseForTests();
+  raw.exec("CREATE TRIGGER fail_batch BEFORE UPDATE OF status ON tasks WHEN NEW.name = 'Atomic second' BEGIN SELECT RAISE(ABORT, 'write failed'); END;");
+  try {
+    assert.equal((await patch("paused", items)).status, 500);
+    assert.equal(database.getTask(first.id)?.status, "active");
+  } finally { raw.exec("DROP TRIGGER fail_batch"); }
+  const response = await patch("paused", [items[0], { ...items[1], revision: items[1].revision + 1 }]);
+  assert.equal(response.status, 200);
+  assert.deepEqual((await response.json()).results.map((item: { success: boolean }) => item.success), [true, false]);
+  assert.equal(database.getTask(first.id)?.status, "paused");
+  assert.equal(database.getTask(second.id)?.status, "active");
+});
+
+test("security audit requires a session and device updates require a non-empty ID", async () => {
+  const token = auth.createApiToken("API reader", "read", 1);
+  assert.equal((await tasks.GET(request("/api/tasks", "GET", undefined, false, { authorization: `Bearer ${token}` }))).status, 200);
+  assert.equal((await audit.GET(request("/api/audit", "GET", undefined, false, { authorization: `Bearer ${token}` }))).status, 401);
+  assert.equal((await audit.GET(request("/api/audit"))).status, 200);
+  const device = { name: "Test device", endpoint: "https://example.test", deviceKey: "test-device-key" };
+  assert.equal((await devices.POST(request("/api/devices", "POST", { ...device, id: "" }))).status, 400);
+  assert.equal((await devices.POST(request("/api/devices", "POST", device))).status, 200);
 });
 
 test("health requires a writable database and a fresh enabled scheduler", async () => {
@@ -183,6 +232,8 @@ test("delivery cancellation and attempt history follow authentication and retent
   assert.equal((await cancellation.POST(request(cancelPath, "POST", {}, false), context)).status, 401);
   assert.equal((await cancellation.POST(request(cancelPath, "POST", {}, true, { origin: "https://evil.example" }), context)).status, 403);
   assert.deepEqual(await (await attempts.GET(request(historyPath), context)).json(), { attempts: [] });
+  assert.equal((await deliveries.PATCH(request("/api/deliveries", "PATCH", { action: ["cancel"], ids: [item.id] }))).status, 400);
+  assert.equal((await cancellation.POST(request("/api/deliveries/missing/cancel", "POST", {}), { params: Promise.resolve({ id: "missing" }) })).status, 404);
   assert.equal((await cancellation.POST(request(cancelPath, "POST", {}), context)).status, 200);
   assert.equal((await cancellation.POST(request(cancelPath, "POST", {}), context)).status, 409);
   const listing = await (await deliveries.GET(request("/api/deliveries?status=cancelled&q=Cancellation%20API&page=999"))).json();

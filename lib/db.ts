@@ -1,7 +1,7 @@
 import { randomUUID, createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { Cron } from "croner";
-import { DEFAULT_SETTINGS, SCHEDULE_TIME_ZONE, type BarkSettings, type Delivery, type DeliveryAttempt, type DeliveryFilter, type Device, type Task, type TaskInput } from "./types";
+import { DEFAULT_SETTINGS, SCHEDULE_TIME_ZONE, type BarkSettings, type Delivery, type DeliveryAttempt, type DeliveryFilter, type Device, type ScheduledTask, type Task, type TaskInput } from "./types";
 import { calendarDays, localDateString, nextTaskDate, previewSchedule } from "./cron";
 import { settingsSchema } from "./validation";
 import { DomainError, redactSecrets } from "./errors";
@@ -9,7 +9,7 @@ import { registerLogSecret } from "./logging";
 import { connection, databasePath, statement, transaction } from "./db/core";
 import { auditEvent } from "./db/security";
 export { dataDirectory, databasePath, initializeDatabase, transaction } from "./db/core";
-export { auditEvent, listAuditEvents, persistSession, sessionExists, revokeOtherPasswordSessions, removeSession, securityState, passwordOverride, savePasswordOverride, saveApiToken, apiTokenValid, revokeCredential } from "./db/security";
+export { auditEvent, listAuditEvents, persistSession, sessionExists, revokeOtherPasswordSessions, removeSession, securityState, passwordOverride, passwordRevision, savePasswordOverride, saveApiToken, apiTokenValid, revokeCredential } from "./db/security";
 
 type TaskRow = {
   id: string; name: string; description: string; starts_at: string; preset: Task["preset"];
@@ -100,10 +100,20 @@ export function listTasks(): Task[] {
   return (statement(`${TASK_SELECT} ORDER BY created_at DESC, id`).all() as TaskRow[]).map((row) => taskFromRow(row, secrets));
 }
 
-export function* activeScheduleTasks(): Generator<Task> {
-  for (const row of statement("SELECT * FROM tasks WHERE status = 'active' AND next_run_at IS NOT NULL ORDER BY next_run_at, id").iterate()) {
-    yield taskFromRow(row as TaskRow);
-  }
+export function activeScheduleTasks(): ScheduledTask[] {
+  const rows = statement(`SELECT id, name, status, preset, cron, time_zone timeZone, next_run_at nextRunAt, paused_at pausedAt,
+    end_date endDate, repeat_count repeatCount, queued_count queuedCount, skip_dates skipDates, include_dates includeDates
+    FROM tasks WHERE status = 'active' AND next_run_at IS NOT NULL ORDER BY next_run_at, id`).all() as unknown as
+    Array<Omit<ScheduledTask, "skipDates" | "includeDates"> & { skipDates: string; includeDates: string }>;
+  return rows.map(({ skipDates, includeDates, ...task }) => ({ ...task, skipDates: JSON.parse(skipDates), includeDates: JSON.parse(includeDates) }));
+}
+
+export function tasksByIds(ids: ReadonlySet<string>): Task[] {
+  if (!ids.size) return [];
+  const secrets = deviceSecrets();
+  const rows = statement(`${TASK_SELECT} WHERE id IN (SELECT value FROM json_each(?)) ORDER BY next_run_at, id`)
+    .all(JSON.stringify([...ids])) as TaskRow[];
+  return rows.map((row) => taskFromRow(row, secrets));
 }
 export function listTasksPaginated(options: { page: number; pageSize: number; status?: Task["status"]; q?: string }): { tasks: Task[]; total: number; page: number } {
   const pageSize = Math.min(50, Math.max(1, Math.floor(options.pageSize)));
@@ -422,6 +432,16 @@ export function markDeliveryFailed(id: string, leaseUntil: string, attempts: num
     refreshTaskError(taskId);
   });
 }
+function deliveryRows(where: string, parameters: Array<string | number>, limit: number, offset: number): Delivery[] {
+  const rows = statement(`SELECT id, task_id taskId, title taskName, body description, occurrence_at occurrenceAt, status, attempts, last_error lastError,
+    next_attempt_at nextAttemptAt, delivered_at deliveredAt, created_at createdAt, activity_at updatedAt, expires_at expiresAt, manual_only manualOnly, device_id deviceId FROM deliveries ${where}
+    ORDER BY activity_at DESC, occurrence_at DESC, id LIMIT ? OFFSET ?`).all(...parameters, limit, offset) as unknown as Delivery[];
+  const secrets = deviceSecrets();
+  return rows.map((row) => ({ ...row, manualOnly: Boolean(row.manualOnly), lastError: row.lastError ? redactSecrets(row.lastError, secrets) : null }));
+}
+
+export function recentDeliveries(): Delivery[] { return deliveryRows("", [], 5, 0); }
+
 export function listDeliveries(options: { page: number; pageSize: number; status?: DeliveryFilter; q?: string }): { deliveries: Delivery[]; total: number; page: number } {
   const conditions: string[] = [];
   const parameters: Array<string | number> = [];
@@ -436,11 +456,7 @@ export function listDeliveries(options: { page: number; pageSize: number; status
   const { total } = statement(`SELECT COUNT(*) total FROM deliveries ${where}`).get(...parameters) as { total: number };
   const pageSize = Math.min(50, Math.max(1, Math.floor(options.pageSize)));
   const page = Math.min(Math.max(1, Math.floor(options.page)), Math.max(1, Math.ceil(total / pageSize)));
-  const rows = statement(`SELECT id, task_id taskId, title taskName, body description, occurrence_at occurrenceAt, status, attempts, last_error lastError,
-    next_attempt_at nextAttemptAt, delivered_at deliveredAt, created_at createdAt, activity_at updatedAt, expires_at expiresAt, manual_only manualOnly, device_id deviceId FROM deliveries ${where}
-    ORDER BY activity_at DESC, occurrence_at DESC, id LIMIT ? OFFSET ?`).all(...parameters, pageSize, (page - 1) * pageSize) as unknown as Delivery[];
-  const secrets = deviceSecrets();
-  return { deliveries: rows.map((row) => ({ ...row, manualOnly: Boolean(row.manualOnly), lastError: row.lastError ? redactSecrets(row.lastError, secrets) : null })), total, page };
+  return { deliveries: deliveryRows(where, parameters, pageSize, (page - 1) * pageSize), total, page };
 }
 export function deliveryAttempts(id: string): DeliveryAttempt[] {
   const secrets = deviceSecrets();
@@ -462,18 +478,17 @@ export function retryDeliveryResult(id: string, now = new Date()): "queued" | "m
   });
 }
 export function retryDelivery(id: string, now = new Date()): boolean { return retryDeliveryResult(id, now) === "queued"; }
-export function cancelDelivery(id: string, now = new Date()): boolean {
+export function cancelDeliveryResult(id: string, now = new Date()): "cancelled" | "missing" | "conflict" {
   return transaction(() => {
-    const changed = statement("UPDATE deliveries SET status = 'cancelled', last_error = NULL, activity_at = ? WHERE id = ? AND status = 'pending'")
-      .run(now.toISOString(), id).changes;
-    if (changed) {
-      const row = statement("SELECT task_id FROM deliveries WHERE id = ?").get(id) as { task_id: string };
-      refreshTaskError(row.task_id);
-      auditEvent("delivery.cancel", id);
-    }
-    return changed > 0;
+    const row = statement("UPDATE deliveries SET status = 'cancelled', last_error = NULL, activity_at = ? WHERE id = ? AND status = 'pending' RETURNING task_id")
+      .get(now.toISOString(), id) as { task_id: string } | undefined;
+    if (!row) return statement("SELECT 1 FROM deliveries WHERE id = ?").get(id) ? "conflict" : "missing";
+    refreshTaskError(row.task_id);
+    auditEvent("delivery.cancel", id);
+    return "cancelled";
   });
 }
+export function cancelDelivery(id: string, now = new Date()): boolean { return cancelDeliveryResult(id, now) === "cancelled"; }
 export function pruneHistory(before: string, limit = 1000): number {
   return transaction(() => {
     const removed = Number(statement(`DELETE FROM deliveries WHERE id IN (SELECT id FROM deliveries WHERE status IN ('sent', 'cancelled', 'expired')
@@ -516,6 +531,7 @@ function deviceSecrets(): string[] {
 }
 
 export function saveDevice(input: { id?: string; name: string; endpoint: string; deviceKey: string; revision?: number }): Device {
+  if (input.id !== undefined && !input.id.trim()) throw new DomainError("设备 ID 不能为空");
   return transaction(() => {
     const id = input.id ?? randomUUID();
     if (id === "default") throw new DomainError("默认设备请通过推送设置修改");
@@ -573,10 +589,12 @@ export function permanentlyDeleteTask(id: string, revision: number): void {
   });
 }
 
-export function editDelivery(id: string, title: string, body: string, expected: string): void {
+export function editDelivery(id: string, title: string, body: string, expected: string, now = new Date()): void {
   transaction(() => {
-    const changed = statement("UPDATE deliveries SET title = ?, body = ?, manual_only = 0, next_attempt_at = ?, activity_at = ? WHERE id = ? AND status = 'pending' AND activity_at = ?")
-      .run(title, body, new Date().toISOString(), new Date().toISOString(), id, expected);
+    const timestamp = now.toISOString();
+    const changed = statement(`UPDATE deliveries SET title = ?, body = ?, manual_only = 0, next_attempt_at = ?, activity_at = ?
+      WHERE id = ? AND status = 'pending' AND activity_at = ? AND (expires_at IS NULL OR expires_at > ?)`)
+      .run(title, body, timestamp, timestamp, id, expected, timestamp);
     if (!changed.changes) throw new DomainError("消息状态已变化，请刷新后重试", 409);
     auditEvent("delivery.edit", id);
   });

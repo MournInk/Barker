@@ -88,14 +88,14 @@ export async function runSchedulerCycle(now = new Date(), deliver = sendBark): P
   try {
     await enqueueDueOccurrences(now);
     lastEnqueueSucceeded = true;
-    writeRuntimeState("scheduler_heartbeat", String(Date.now()));
-    writeRuntimeState("scheduler_enqueue_error", "");
-  }
-  catch (error) {
+  } catch (error) {
     lastEnqueueSucceeded = false;
     logError("scheduler.enqueue.failed", error);
-    try { writeRuntimeState("scheduler_enqueue_error", "enqueue_failed"); } catch {}
   }
+  try {
+    writeRuntimeState("scheduler_enqueue_error", lastEnqueueSucceeded ? "" : "enqueue_failed");
+    if (lastEnqueueSucceeded) writeRuntimeState("scheduler_heartbeat", String(Date.now()));
+  } catch (error) { logError("scheduler.heartbeat.failed", error); }
   if (cycle) return cycle;
   cycle = (async () => {
     let failure = !lastEnqueueSucceeded;

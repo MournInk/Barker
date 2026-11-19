@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { requestIsAuthorized } from "@/lib/auth";
 import { cancelDelivery, compactDatabase, listDeliveries, pruneHistory, retryDelivery } from "@/lib/db";
-import { apiRoute, jsonError, jsonErrorFrom, jsonObjectBody, requestBody, requireSameOriginMutation } from "@/lib/http";
+import { apiRoute, jsonError, jsonObjectBody, requestBody, requireSameOriginMutation } from "@/lib/http";
 import type { DeliveryFilter } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -26,19 +26,18 @@ export const DELETE = apiRoute(async (request: Request): Promise<NextResponse> =
   if (!requestIsAuthorized(request)) return jsonError("未授权", 401);
   const blocked = requireSameOriginMutation(request);
   if (blocked) return blocked;
-  try {
-    const body = jsonObjectBody(await requestBody(request));
-    const before = typeof body.before === "string" ? new Date(body.before) : new Date(NaN);
-    if (!Number.isFinite(before.getTime()) || before.getTime() > Date.now() - 7 * 86_400_000) return jsonError("只能清理至少七天前的已结束记录", 400);
-    let removed = 0;
-    let batch: number;
-    do {
-      batch = pruneHistory(before.toISOString()); removed += batch;
-      await new Promise<void>((resolve) => setImmediate(resolve));
-    } while (body.all === true && batch === 1000);
-    if (body.compact === true) compactDatabase();
-    return NextResponse.json({ removed });
-  } catch (error) { return jsonErrorFrom(error); }
+  const body = jsonObjectBody(await requestBody(request));
+  const before = typeof body.before === "string" ? new Date(body.before) : new Date(NaN);
+  if (!Number.isFinite(before.getTime()) || before.getTime() > Date.now() - 7 * 86_400_000) return jsonError("只能清理至少七天前的已结束记录", 400);
+  let removed = 0;
+  let batch: number;
+  do {
+    batch = pruneHistory(before.toISOString());
+    removed += batch;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  } while (body.all === true && batch === 1000);
+  if (body.compact === true) compactDatabase();
+  return NextResponse.json({ removed });
 });
 
 export const PATCH = apiRoute(async (request: Request) => {
@@ -46,6 +45,7 @@ export const PATCH = apiRoute(async (request: Request) => {
   const blocked = requireSameOriginMutation(request);
   if (blocked) return blocked;
   const body = jsonObjectBody(await requestBody(request));
-  if (!["cancel", "retry"].includes(String(body.action)) || !Array.isArray(body.ids) || body.ids.length > 50 || !body.ids.every((id) => typeof id === "string")) return jsonError("无效的批量操作", 400);
-  return NextResponse.json({ results: body.ids.map((id: string) => ({ id, success: body.action === "cancel" ? cancelDelivery(id) : retryDelivery(id) })) });
+  const { action, ids } = body;
+  if ((action !== "cancel" && action !== "retry") || !Array.isArray(ids) || !ids.length || ids.length > 50 || !ids.every((id) => typeof id === "string" && id.trim())) return jsonError("无效的批量操作", 400);
+  return NextResponse.json({ results: ids.map((id: string) => ({ id, success: action === "cancel" ? cancelDelivery(id) : retryDelivery(id) })) });
 });

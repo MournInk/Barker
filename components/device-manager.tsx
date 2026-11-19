@@ -14,31 +14,35 @@ export function DeviceManager() {
   const { data, error, refresh } = useResource<{ devices: Device[] }>("/api/devices", 15000);
   const [form, setForm] = useState(empty);
   const [dirty, setDirty] = useState(false);
-  const [feedback, setFeedback] = useState("");
+  const [feedback, setFeedback] = useState<{ message: string; kind: "success" | "error" } | null>(null);
   const [busy, setBusy] = useState(false);
   const [remove, setRemove] = useState<Device | null>(null);
   useUnsaved(dirty);
   function update(field: string, value: string) { setForm((current) => ({ ...current, [field]: value })); setDirty(true); }
   async function save(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault(); setBusy(true); setFeedback("");
+    event.preventDefault(); setBusy(true); setFeedback(null);
     try {
       await api("/api/devices", { method: "POST", body: JSON.stringify(form) });
-      setForm(empty); setDirty(false); setFeedback("设备已保存。"); await refresh();
-    } catch (error) { setFeedback(errorMessage(error)); }
+      setForm(empty); setDirty(false); setFeedback({ message: "设备已保存。", kind: "success" }); await refresh();
+    } catch (error) { setFeedback({ message: errorMessage(error), kind: "error" }); }
     finally { setBusy(false); }
   }
   async function deleteDevice() {
     if (!remove) return;
     setBusy(true);
+    setFeedback(null);
     try {
       await api(`/api/devices?id=${encodeURIComponent(remove.id)}`, { method: "DELETE", headers: { "if-match": String(remove.revision) } });
-      setRemove(null); await refresh();
-    } catch (error) { setFeedback(errorMessage(error)); }
-    finally { setBusy(false); }
+      if (form.id === remove.id) { setForm(empty); setDirty(false); }
+      setFeedback({ message: "设备已删除。", kind: "success" });
+      await refresh();
+    } catch (error) { setFeedback({ message: errorMessage(error), kind: "error" }); }
+    finally { setRemove(null); setBusy(false); }
   }
   return <Card className="management-card">
     <h2>更多设备</h2><p>每个任务可选择独立设备与服务地址。默认设备在上方设置。</p>
-    {(error || feedback) && <Notice>{error || feedback}</Notice>}
+    {error && <Notice>{error}</Notice>}
+    {feedback && <Notice kind={feedback.kind}>{feedback.message}</Notice>}
     <div className="management-list">{data?.devices.filter((device) => device.id !== "default").map((device) => <div key={device.id}>
       <span><strong>{device.name}</strong><small>{device.endpoint}</small></span>
       <Button size="sm" variant="ghost" isDisabled={busy} onPress={() => { if (dirty && !window.confirm("放弃当前设备编辑？")) return; setForm({ ...device, deviceKey: "" }); setDirty(false); }}>编辑</Button>

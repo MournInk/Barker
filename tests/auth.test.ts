@@ -34,13 +34,13 @@ test("failed login state stays bounded when clients rotate addresses", () => {
   for (let i = 0; i < 5000; i += 1) auth.verifyPassword("bad", base + i, `rotating-client-${i}`);
   const size = auth.__failedLoginsSizeForTests();
   assert.ok(size > 0 && size <= 1000, `failed-login map is not bounded: ${size} entries`);
-  // A fresh client still gets the documented 5-failure / 10-minute lockout.
-  const client = "rotating-client-after-cap";
-  for (let i = 0; i < 5; i += 1) assert.equal(auth.verifyPassword("bad", base + 10_000 + i, client), false);
-  assert.equal(auth.verifyPassword("bad", base + 10_100, client), false);
-  assert.equal(auth.verifyPassword("test-access-password", base + 10_101, client), false);
   assert.ok(auth.loginRetryAfter("another-fresh-address", base + 10_101) > 0);
-  assert.equal(auth.verifyPassword("test-access-password", base + 10_100 + 601_000, client), true);
+  assert.equal(auth.verifyPassword("test-access-password", base + 31_000, "another-fresh-address"), true);
+  const client = "rotating-client-after-cap";
+  for (let i = 0; i < 5; i += 1) assert.equal(auth.verifyPassword("bad", base + 31_000 + i, client), false);
+  assert.equal(auth.verifyPassword("bad", base + 31_100, client), false);
+  assert.equal(auth.verifyPassword("test-access-password", base + 31_101, client), false);
+  assert.equal(auth.verifyPassword("test-access-password", base + 31_100 + 601_000, client), true);
   // Entries whose window and lockout have both expired are pruned.
   assert.equal(auth.__pruneFailedLoginsForTests(base + 3_600_000), 0);
 });
@@ -117,7 +117,7 @@ function runAuthProcess(env: NodeJS.ProcessEnv): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = spawn(
       process.execPath,
-      ["--import", "tsx", "--eval", "import('./lib/auth.ts').then((auth) => { auth.initializeAuth(); const { readFileSync } = require('node:fs'); console.log(readFileSync(process.env.BARKER_DATA_DIR + '/session-secret.txt', 'utf8').trim()); process.exit(0); }).catch((error) => { console.error(error); process.exit(1); });"],
+      ["--import", "tsx", "--eval", "import('./lib/auth.ts').then((auth) => { auth.initializeAuth(); const { readFileSync } = require('node:fs'); console.log(readFileSync(process.env.BARKER_DATA_DIR + '/session-secret.txt', 'utf8').trim()); }).catch((error) => { console.error(error); process.exitCode = 1; });"],
       { cwd: process.cwd(), env },
     );
     let stdout = "";
@@ -125,7 +125,7 @@ function runAuthProcess(env: NodeJS.ProcessEnv): Promise<string> {
     child.stdout.setEncoding("utf8").on("data", (chunk: string) => { stdout += chunk; });
     child.stderr.setEncoding("utf8").on("data", (chunk: string) => { stderr += chunk; });
     child.once("error", reject);
-    child.once("exit", (code) => code === 0 ? resolve(stdout.trim()) : reject(new Error(stderr || `Auth worker exited with ${code}`)));
+    child.once("close", (code) => code === 0 ? resolve(stdout.trim()) : reject(new Error(stderr || `Auth worker exited with ${code}`)));
   });
 }
 

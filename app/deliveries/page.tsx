@@ -30,6 +30,8 @@ export default function DeliveriesPage() {
   const params = new URLSearchParams({ page: String(page), pageSize: "12", q: search });
   if (filter !== "all") params.set("status", filter);
   const { data, error, refresh } = useResource<{ deliveries: Delivery[]; total: number; page: number }>(`/api/deliveries?${params}`);
+  const pending = data?.deliveries.filter((item) => item.status === "pending") ?? [];
+  const selectedIds = pending.filter((item) => selected.includes(item.id)).map((item) => item.id);
   async function mutate(item: Delivery, action: "retry" | "cancel") {
     setBusy(item.id);
     try {
@@ -41,10 +43,10 @@ export default function DeliveriesPage() {
     finally { setBusy(""); }
   }
   async function bulk(action: string) {
+    if (!selectedIds.length) { setBulkConfirm(false); return; }
     setBusy("bulk");
     try {
-      const ids = data?.deliveries.filter((item) => selected.includes(item.id) && item.status === "pending").map((item) => item.id) ?? [];
-      const result = await api<{ results: Array<{ success: boolean }> }>("/api/deliveries", { method: "PATCH", body: JSON.stringify({ action, ids }) });
+      const result = await api<{ results: Array<{ success: boolean }> }>("/api/deliveries", { method: "PATCH", body: JSON.stringify({ action, ids: selectedIds }) });
       notify(`已处理 ${result.results.filter((item) => item.success).length} 条消息；状态已变化的记录已跳过。`);
       setSelected([]); setBulkConfirm(false); await Promise.all([refresh(), refreshDashboard()]);
     } catch (error) { notify(errorMessage(error), "error"); }
@@ -61,12 +63,12 @@ export default function DeliveriesPage() {
   }
   return <div className="page-stack">
     <div className="page-heading"><div><p className="eyebrow">每一条提醒，都有回音</p><h1>投递记录<span className="heading-period">。</span></h1><p>查看通知和每次尝试，按需要重试或取消等待中的消息。</p></div><Chip variant="soft" color={dashboard?.deliveries.retrying ? "warning" : "default"}><Chip.Label>{dashboard?.deliveries.retrying ? `${dashboard.deliveries.retrying} 条自动重试中` : "投递记录已持久保存"}</Chip.Label></Chip></div>
-    <Card className="deliveries-panel"><div className="list-toolbar"><Tabs selectedKey={filter} onSelectionChange={(key) => { setFilter(String(key)); setPage(1); }} variant="secondary" className="filter-tabs"><Tabs.ListContainer><Tabs.List aria-label="投递状态">{filters.map((item) => <Tabs.Tab id={item.id} key={item.id}>{item.label}<Tabs.Indicator /></Tabs.Tab>)}</Tabs.List></Tabs.ListContainer></Tabs><span className="mini-label">请求完成 5 秒后刷新</span></div>
+    <Card className="deliveries-panel"><div className="list-toolbar"><Tabs selectedKey={filter} onSelectionChange={(key) => { setFilter(String(key)); setPage(1); setSelected([]); }} variant="secondary" className="filter-tabs"><Tabs.ListContainer><Tabs.List aria-label="投递状态">{filters.map((item) => <Tabs.Tab id={item.id} key={item.id}>{item.label}<Tabs.Indicator /></Tabs.Tab>)}</Tabs.List></Tabs.ListContainer></Tabs><span className="mini-label">请求完成 5 秒后刷新</span></div>
       <div className="bulk-toolbar">
-        <Selection label="选择本页待投递消息" selected={Boolean(data?.deliveries.some((item) => item.status === "pending") && data.deliveries.filter((item) => item.status === "pending").every((item) => selected.includes(item.id)))} onChange={(value) => setSelected(value ? data?.deliveries.filter((item) => item.status === "pending").map((item) => item.id) ?? [] : [])} />
-        <Input aria-label="搜索投递记录" placeholder="搜索标题或正文" value={search} onChange={(event) => { setSearch(event.target.value); setPage(1); }} maxLength={200} />
-        <Button size="sm" variant="ghost" isDisabled={!selected.length || Boolean(busy)} onPress={() => void bulk("retry")}>批量重试</Button>
-        <Button size="sm" variant="danger-soft" isDisabled={!selected.length || Boolean(busy)} onPress={() => setBulkConfirm(true)}>批量取消</Button>
+        <Selection label="选择本页待投递消息" selected={pending.length > 0 && selectedIds.length === pending.length} onChange={(value) => setSelected(value ? pending.map((item) => item.id) : [])} />
+        <Input aria-label="搜索投递记录" placeholder="搜索标题或正文" value={search} onChange={(event) => { setSearch(event.target.value); setPage(1); setSelected([]); }} maxLength={200} />
+        <Button size="sm" variant="ghost" isDisabled={!selectedIds.length || Boolean(busy)} onPress={() => void bulk("retry")}>批量重试</Button>
+        <Button size="sm" variant="danger-soft" isDisabled={!selectedIds.length || Boolean(busy)} onPress={() => setBulkConfirm(true)}>批量取消</Button>
       </div>
       {error && <Notice>{error}<Button variant="ghost" size="sm" onPress={() => void refresh()}>重试</Button></Notice>}
       {!data ? error ? null : <div className="loading-state">正在读取投递记录…</div> : !data.deliveries.length ? <Empty title="没有此状态的记录" description="提醒触发后，会在这里记录投递和尝试状态。" icon="inbox" /> : <div className="delivery-list">{data.deliveries.map((item) => {
@@ -84,7 +86,7 @@ export default function DeliveriesPage() {
           </div><div className="delivery-actions">{retrying && <Button variant="outline" size="sm" isPending={busy === item.id} isDisabled={Boolean(busy)} onPress={() => void mutate(item, "retry")}>立即重试</Button>}{item.status === "pending" && <Button variant="ghost" size="sm" isDisabled={Boolean(busy)} onPress={() => setCancel(item)}>取消投递</Button>}</div>
         </article>;
       })}</div>}
-      {data && <Pagination page={data.page} total={data.total} pageSize={12} onChange={setPage} />}
+      {data && <Pagination page={data.page} total={data.total} pageSize={12} onChange={(target) => { setPage(target); setSelected([]); }} />}
     </Card><div className="delivery-policy"><div><Glyph name="shield" size={20} /><h3>保存记录，按策略重试</h3></div><p>到期提醒先持久化，再发送。失败后按 5 秒至 1 小时退避，并遵守 Bark 的 Retry-After；过期或手动取消的消息停止投递。</p><p>网络中断时可能无法确认 Bark 是否已收到，重试可能产生重复通知。「Bark 已接收」表示 API 确认接收，设备是否展示取决于 Bark 和系统通知设置。</p></div>
     {cancel && <Confirm title={`取消「${cancel.taskName}」这次投递？`} confirmLabel="取消投递" onClose={() => setCancel(null)} onConfirm={() => void mutate(cancel, "cancel")} busy={busy === cancel.id}><p>仅取消这一条等待中的消息，保留正文和尝试历史。任务未来的排期继续运行；正在发送的请求无法撤回。</p></Confirm>}
     {bulkConfirm && <Confirm title="取消选中的待投递消息？" confirmLabel="批量取消" onClose={() => setBulkConfirm(false)} onConfirm={() => void bulk("cancel")} busy={busy === "bulk"}><p>仅处理当前页选中的等待消息，记录会保留。</p></Confirm>}

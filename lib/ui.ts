@@ -1,5 +1,5 @@
-import { SCHEDULE_TIME_ZONE, type RecurrencePreset } from "./types";
-import { deliverySchema, taskSchema } from "./contracts";
+import { presetCronFromParts, SCHEDULE_TIME_ZONE, type RecurrencePreset } from "./types";
+import { deliverySchema, taskSchema, timestampSchema } from "./contracts";
 
 export { SCHEDULE_TIME_ZONE };
 
@@ -64,11 +64,7 @@ export function clientPresetCron(preset: RecurrencePreset, startsAt: string): st
   if (!validDate(dateValue) || dateValue.toISOString().slice(0, 10) !== date) return "";
   const weekday = dateValue.getUTCDay();
   if (!Number.isInteger(hour) || hour < 0 || hour > 23 || !Number.isInteger(minute) || minute < 0 || minute > 59 || !Number.isInteger(day) || !Number.isInteger(weekday)) return "";
-  if (preset === "daily" || preset === "once") return `${minute} ${hour} * * *`;
-  if (preset === "weekdays") return `${minute} ${hour} * * 1-5`;
-  if (preset === "weekly") return `${minute} ${hour} * * ${weekday}`;
-  if (preset === "monthly") return `${minute} ${hour} ${day} * *`;
-  return "";
+  return presetCronFromParts(preset, { hour, minute, day, weekday });
 }
 
 /** getRandomValues works on ordinary HTTP LAN deployments where randomUUID may be unavailable. */
@@ -137,7 +133,7 @@ export function validApiPayload(url: string, data: unknown): boolean {
     && objectValue(object.stats) && ["active", "paused", "todaySent", "totalSent"].every((key) => nonNegativeInteger((object.stats as Record<string, unknown>)[key]))
     && objectValue(object.deliveries) && nonNegativeInteger(object.deliveries.pending) && nonNegativeInteger(object.deliveries.retrying) && nullableTimestamp(object.deliveries.nextRetryAt)
     && typeof object.endpoint === "string" && typeof object.deviceKeyConfigured === "boolean" && timestampValue(object.serverTime);
-  if (path === "/api/tasks/preview") return Array.isArray(object.dates) && object.dates.every((value) => typeof value === "string" && Number.isFinite(Date.parse(value)));
+  if (path === "/api/tasks/preview") return Array.isArray(object.dates) && object.dates.every((value) => timestampSchema.safeParse(value).success);
   if (path === "/api/settings") {
     if (!Number.isSafeInteger(object.revision) || Number(object.revision) < 1) return false;
     if (object.saved === true) return true;

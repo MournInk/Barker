@@ -61,7 +61,7 @@ test("backup and restore are checksummed, private, and never overwrite data", as
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test("restore rejects tampered or unexpected backup content", async () => {
+test("restore rejects tampered backup content", async () => {
   const { root, source } = fixture();
   const backup = join(root, "backup");
   try {
@@ -72,13 +72,27 @@ test("restore rejects tampered or unexpected backup content", async () => {
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test("restore rejects unexpected files in a valid backup", async () => {
+  const { root, source } = fixture();
+  const backup = join(root, "backup");
+  const target = join(root, "restored");
+  try {
+    await backupData(source, backup);
+    writeFileSync(join(backup, "unexpected.txt"), "extra");
+    await assert.rejects(restoreData(backup, target), /unexpected files/);
+    assert.equal(existsSync(target), false);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test("backup and restore refuse targets nested inside their source", async () => {
   const { root, source } = fixture();
   const backup = join(root, "backup");
   try {
     await assert.rejects(backupData(source, join(source, "backup")), /outside the source/);
+    await assert.rejects(backupData(source, join(source, "..cache")), /outside the source/);
     await backupData(source, backup);
     await assert.rejects(restoreData(backup, join(backup, "restored")), /outside the backup/);
+    await assert.rejects(restoreData(backup, join(backup, "..cache")), /outside the backup/);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

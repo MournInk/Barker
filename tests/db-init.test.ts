@@ -57,6 +57,22 @@ test("an older application refuses to downgrade a newer database schema", async 
   }
 });
 
+test("a migration failure leaves a shared connection open", () => {
+  const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "--eval", `
+    import assert from 'node:assert/strict';
+    import { DatabaseSync } from 'node:sqlite';
+    const connection = new DatabaseSync(':memory:');
+    connection.exec('PRAGMA user_version=99');
+    globalThis.barkerDb = connection;
+    const { initializeDatabase } = await import('./lib/db.ts');
+    assert.throws(initializeDatabase, /newer than supported/);
+    assert.equal(globalThis.barkerDb, connection);
+    assert.equal(connection.prepare('PRAGMA user_version').get().user_version, 99);
+    connection.close();
+  `], { env: { ...process.env, BARKER_DATA_DIR: directory }, encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+});
+
 test("startup tightens existing data directory and database permissions", async () => {
   const existing = mkdtempSync(join(tmpdir(), "barker-permissions-"));
   try {

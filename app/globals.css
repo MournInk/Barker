@@ -61,7 +61,7 @@ code { font-size: 13px; }
 .brand-period { color: var(--accent); }
 .sidebar-create { width: 100%; margin-top: 36px; background: var(--surface); justify-content: flex-start; padding-left: 17px; gap: 12px; border-color: var(--border); }
 .nav-section { color: var(--muted); font-size: 12px; letter-spacing: 1px; margin: 31px 14px 13px; }
-.sidebar nav { display: flex; flex-direction: column; gap: 7px; }
+.sidebar nav, .mobile-nav-content nav { display: flex; flex-direction: column; gap: 7px; }
 .nav-item { display: flex; align-items: center; gap: 13px; min-height: 43px; padding: 0 14px; font-size: 15px; border-radius: 10px; color: var(--muted); }
 .nav-item:hover { background: var(--surface-secondary); }
 .nav-item.selected { background: var(--surface); color: var(--accent); font-weight: 650; box-shadow: var(--surface-shadow); }
@@ -250,8 +250,9 @@ code { font-size: 13px; }
 .row-actions { display: flex; align-items: center; justify-content: flex-end; gap: 1px; color: var(--muted); }
 .row-actions .button { width: 36px; min-width: 36px; height: 36px; }
 .row-actions svg { width: 15px; height: 15px; }
-.pagination { display: flex; flex-direction: row; align-items: center; justify-content: space-between; padding: 17px 25px; border-top: 1px solid var(--separator); gap: 10px; font-size: 12px; color: var(--muted); }
-.pagination > div { display: flex; align-items: center; gap: 7px; }
+.pagination { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; padding: 17px 25px; border-top: 1px solid var(--separator); gap: 10px; font-size: 12px; color: var(--muted); }
+.pagination > div, .pagination-jump { display: flex; align-items: center; gap: 7px; }
+.pagination-jump .input { width: 56px; padding-inline: 8px; font-size: 12px; }
 .pagination .button { font-size: 12px; }
 .page-number { font-size: 12px; padding: 0 6px; white-space: nowrap; }
 .page-note { display: flex; align-items: flex-start; justify-content: center; gap: 7px; color: var(--muted); font-size: 12px; line-height: 1.8; padding: 0 15px; }
@@ -370,7 +371,7 @@ code { font-size: 13px; }
 .access-story-copy { margin: auto 0; padding: 70px 0 240px; }
 .access-story-copy .eyebrow { color: #c0cfb8aa; font-size: 13px; }
 .access-story h1 { font-size: clamp(35px, 4.2vw, 59px); font-weight: 500; line-height: 1.5; letter-spacing: 1px; margin-top: 24px; }
-.access-story-copy > p { font-size: 15px; line-height: 2; margin-top: 22px; color: #c8d7bfaa; }
+.access-story-copy > p { font-size: 15px; line-height: 2; margin-top: 22px; color: #dce6d0; }
 .access-orbit { position: absolute; width: 350px; height: 350px; bottom: -25px; right: -30px; transform: rotate(-17deg); }
 .orbit-ring { position: absolute; inset: 10px; border: 1px solid #d5e1b827; border-radius: 50%; }
 .orbit-ring.inner { inset: 55px; border-style: dashed; }
@@ -449,10 +450,6 @@ code { font-size: 13px; }
 .attempt-history p { line-height: 1.8; overflow-wrap: anywhere; }
 .filter-tabs .tabs__list-container { overflow-x: auto; max-width: 100%; }
 .metric-card > div > span { white-space: normal; }
-.mini-label, .eyebrow, .cron-caption, .progress-caption, .delivery-meta, .field-hint,
-.upcoming-copy > small, .recent-row small, .recent-row time, .metric-card > div > span,
-.week-strip button small, .activity-column > span, .settings-actions > span, .storage-note p,
-.storage-note code, .page-note, .delivery-policy p, .account-label small { font-size: 12px; }
 @media (max-width: 760px) {
   .welcome-panel { display: none; }
   .next-panel { display: flex; min-height: 210px; }
@@ -460,8 +457,9 @@ code { font-size: 13px; }
 }
 @media (max-width: 540px) {
   .delivery-actions { margin-left: 39px; }
-  .week-strip button small { font-size: 12px; }
   .task-table td:nth-child(4) { flex-wrap: wrap; }
+  .mini-label, .eyebrow, .cron-caption, .field-hint, .recent-row time, .week-strip button small,
+  .activity-column > span, .account-label small { font-size: 12px; }
   .metric-card > div > span, .progress-caption, .delivery-meta, .upcoming-copy small,
   .recent-row small, .task-name-cell p, .next-run-cell, .settings-actions > span,
   .storage-note p, .storage-note code, .page-note, .delivery-policy p, .delivery-error,

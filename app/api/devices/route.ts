@@ -5,7 +5,7 @@ import { listDevices, removeDevice, saveDevice } from "@/lib/db";
 import { apiRoute, expectedRevision, jsonError, requestBody, requireSameOriginMutation, validationMessage } from "@/lib/http";
 
 export const runtime = "nodejs";
-const schema = z.object({ id: z.string().max(100).optional(), name: z.string().trim().min(1).max(80), endpoint: z.string().trim().max(300), deviceKey: z.string().trim().max(300).default(""), revision: z.number().int().positive().optional() });
+const schema = z.object({ id: z.string().trim().min(1, "设备 ID 不能为空").max(100).optional(), name: z.string().trim().min(1).max(80), endpoint: z.string().trim().max(300), deviceKey: z.string().trim().max(300).default(""), revision: z.number().int().positive().optional() });
 
 export const GET = apiRoute(async (request: Request) => {
   if (!requestIsAuthorized(request)) return jsonError("未授权", 401);

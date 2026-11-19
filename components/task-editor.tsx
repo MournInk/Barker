@@ -1,6 +1,7 @@
 "use client";
 
 import { Button, Input, Label, Modal, Tabs, TextArea, TextField } from "@heroui/react";
+import { parseDate } from "@internationalized/date";
 import Link from "next/link";
 import { useEffect, useId, useMemo, useRef, useState, type FormEvent } from "react";
 import type { Device, RecurrencePreset, Task, TaskInput } from "@/lib/types";
@@ -28,7 +29,11 @@ export function TaskEditor({ task, duplicate = false, onClose }: { task?: Task; 
   const [cron, setCron] = useState(task?.cron ?? "0 9 * * *");
   const [limit, setLimit] = useState(task?.endDate ? "date" : task && task.repeatCount === null ? "never" : "count");
   const [count, setCount] = useState(String(task?.repeatCount ?? 30));
-  const [endDate, setEndDate] = useState(() => task?.endDate ?? localDateValue(new Date(Date.now() + 30 * 86_400_000), timeZone));
+  const [endDate, setEndDate] = useState(() => {
+    const today = localDateValue(new Date(), timeZone);
+    if (task?.endDate && (!duplicate || task.endDate >= today)) return task.endDate;
+    return parseDate(today).add({ days: 30 }).toString();
+  });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [lateness, setLateness] = useState(String(task?.maxLatenessMinutes ?? ""));
@@ -100,7 +105,7 @@ export function TaskEditor({ task, duplicate = false, onClose }: { task?: Task; 
             <Field label="提醒名称" value={name} onChange={(event) => setName(event.target.value)} required maxLength={80} autoFocus />
             <TextField className="field"><Label>提醒内容</Label><TextArea variant="secondary" rows={3} value={description} onChange={(event) => setDescription(event.target.value)} maxLength={2000} aria-describedby={descriptionHintId} /><p id={descriptionHintId} className="field-hint">标题与正文合计最多 3000 个 UTF-8 字节。</p></TextField>
             <div className="form-grid">
-              <CalendarField label="开始时间" value={startsAt} onChange={setStartsAt} />
+              <CalendarField label="开始时间" value={startsAt} onChange={setStartsAt} timeZone={timeZone} />
               <Pick label="重复周期" value={preset} onChange={(value) => setPreset(value as RecurrencePreset)} options={Object.entries(PRESET_LABELS).map(([value, label]) => ({ value, label }))} />
             </div>
             <Pick label="投递设备" value={deviceId} onChange={setDeviceId} options={(devices?.devices ?? [{ id: "default", name: "默认设备" }]).map((device) => ({ value: device.id, label: device.name }))} />
@@ -123,7 +128,7 @@ export function TaskEditor({ task, duplicate = false, onClose }: { task?: Task; 
                   <Tabs.Tab id="count">按重复次数<Tabs.Indicator /></Tabs.Tab><Tabs.Tab id="date">按截止日期<Tabs.Indicator /></Tabs.Tab><Tabs.Tab id="never">持续重复<Tabs.Indicator /></Tabs.Tab>
                 </Tabs.List></Tabs.ListContainer>
                 <Tabs.Panel id="count"><div className="count-field"><Input aria-label="重复次数" variant="secondary" type="number" min={1} max={100000} value={count} onChange={(event) => setCount(event.target.value)} required={limit === "count"} /><span>次后结束</span></div></Tabs.Panel>
-                <Tabs.Panel id="date"><CalendarField label="截止日期（含当天）" value={endDate} onChange={setEndDate} dateOnly /></Tabs.Panel>
+                <Tabs.Panel id="date"><CalendarField label="截止日期（含当天）" value={endDate} onChange={setEndDate} timeZone={timeZone} dateOnly /></Tabs.Panel>
                 <Tabs.Panel id="never"><p className="field-hint">持续排期，直到暂停或归档。</p></Tabs.Panel>
               </Tabs>
             </>}

@@ -71,6 +71,7 @@ test("task timezone and final payload byte limit are validated", () => {
   const base = { name: "喝水", startsAt: "2026-10-19T09:30:00+08:00", preset: "custom" as const, cron: "30 9 * * *", repeatCount: 10 };
   assert.equal(taskInputSchema.safeParse({ ...base, timeZone: "Asia/Shanghai" }).success, true);
   assert.equal(taskInputSchema.safeParse({ ...base, timeZone: "Mars/Olympus" }).success, false);
+  assert.equal(taskInputSchema.safeParse({ ...base, timeZone: "+08:00" }).success, false);
   assert.equal(taskInputSchema.safeParse({ ...base, description: "中".repeat(1001) }).success, false);
   assert.equal(settingsSchema.safeParse({ endpoint: "https://api.day.app", deviceKey: "中".repeat(300), title: "Barker", sound: "中".repeat(80), group: "中".repeat(100), icon: "" }).success, false);
 });

@@ -1,7 +1,7 @@
 import { createHash, createHmac, randomBytes, randomUUID, scryptSync, timingSafeEqual } from "node:crypto";
-import { existsSync, linkSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { linkSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { apiTokenValid, auditEvent, passwordOverride, persistSession, removeSession, revokeOtherPasswordSessions, saveApiToken, savePasswordOverride, sessionExists } from "./db";
+import { apiTokenValid, auditEvent, passwordOverride, passwordRevision, persistSession, removeSession, revokeOtherPasswordSessions, saveApiToken, savePasswordOverride, sessionExists } from "./db";
 import { DomainError } from "./errors";
 import { initializeStorage, privateFile, runtimeDataDir } from "./storage";
 import { registerLogSecret } from "./logging";
@@ -13,11 +13,12 @@ const MIN_SECRET_LENGTH = 16;
 export const MAX_SECRET_LENGTH = 300;
 let generatedPassword = false;
 
-function readSecretFile(path: string): string {
+function readSecretFile(path: string): string | null {
   try {
     return readFileSync(/* turbopackIgnore: true */ path, "utf8").trim();
-  } catch {
-    return "";
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
   }
 }
 
@@ -34,9 +35,9 @@ function loadOrCreateSecret(name: string, configuredValue?: string): string {
   const path = join(/* turbopackIgnore: true */ runtimeDataDir, name);
   privateFile(path);
   const existing = readSecretFile(path);
-  if (existing.length > MAX_SECRET_LENGTH) throw new Error(`Barker secret ${name} must be at most ${MAX_SECRET_LENGTH} characters`);
-  if (existing.length >= MIN_SECRET_LENGTH) return existing;
-  if (existsSync(/* turbopackIgnore: true */ path)) {
+  if (existing !== null) {
+    if (existing.length > MAX_SECRET_LENGTH) throw new Error(`Barker secret ${name} must be at most ${MAX_SECRET_LENGTH} characters`);
+    if (existing.length >= MIN_SECRET_LENGTH) return existing;
     // Fail fast instead of silently accepting an empty/truncated secret (an empty
     // session secret lets anyone forge a valid cookie, an empty password lets
     // anyone log in). A crash during first write is the realistic cause.
@@ -53,9 +54,10 @@ function loadOrCreateSecret(name: string, configuredValue?: string): string {
     // winner instead of each keeping its own secret.
     linkSync(temporary, path);
     if (name === "access-password.txt") generatedPassword = true;
-  } catch {
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
     const winner = readSecretFile(path);
-    if (winner.length < MIN_SECRET_LENGTH || winner.length > MAX_SECRET_LENGTH) {
+    if (winner === null || winner.length < MIN_SECRET_LENGTH || winner.length > MAX_SECRET_LENGTH) {
       throw new Error(`Unable to persist Barker secret ${name}`);
     }
     return winner;
@@ -74,6 +76,7 @@ let sessionSecret = "";
 let passwordFingerprint = "";
 let initialized = false;
 let credential: { hash: string; salt: string } | null = null;
+let credentialRevision: number | undefined;
 
 export function initializeAuth(): void {
   if (initialized) { refreshCredential(); return; }
@@ -82,25 +85,30 @@ export function initializeAuth(): void {
   sessionSecret = loadOrCreateSecret("session-secret.txt", process.env.BARKER_SESSION_SECRET);
   registerLogSecret(runtimePassword);
   registerLogSecret(sessionSecret);
-  initialized = true;
   refreshCredential();
+  initialized = true;
 }
 
 function refreshCredential(): void {
+  const revision = passwordRevision();
+  if (credentialRevision === revision) return;
   const raw = passwordOverride();
   const override = raw ? JSON.parse(raw) as { source: string; hash: string; salt: string } : null;
   const source = createHmac("sha256", sessionSecret).update(runtimePassword).digest("hex");
-  credential = override?.source === source ? override : null;
-  const nextFingerprint = createHmac("sha256", sessionSecret).update(credential?.hash ?? runtimePassword).digest("hex");
+  const nextCredential = override?.source === source ? override : null;
+  const nextFingerprint = createHmac("sha256", sessionSecret).update(nextCredential?.hash ?? runtimePassword).digest("hex");
   if (nextFingerprint !== passwordFingerprint) {
+    revokeOtherPasswordSessions(nextFingerprint);
     passwordFingerprint = nextFingerprint;
-    revokeOtherPasswordSessions(passwordFingerprint);
   }
+  credential = nextCredential;
+  credentialRevision = revision;
 }
 let passwordPrinted = false;
 const failedLogins = new Map<string, { count: number; firstFailureAt: number; lockedUntil: number }>();
 const FAILED_LOGIN_WINDOW_MS = 10 * 60_000;
 const FAILED_LOGIN_LOCKOUT_MS = 10 * 60_000;
+const GLOBAL_FAILED_LOGIN_LOCKOUT_MS = 30_000;
 // With BARKER_TRUST_PROXY an attacker can rotate client keys freely, so keep the
 // in-memory limiter bounded instead of letting it grow with every new address.
 const MAX_FAILED_LOGIN_ENTRIES = 1000;
@@ -154,7 +162,6 @@ export function verifyPassword(candidate: string, now = Date.now(), clientKey = 
     failedLogins.delete(clientKey);
     return true;
   }
-  if (state && state.lockedUntil > now) return false;
   const activeWindow = state && now - state.firstFailureAt < FAILED_LOGIN_WINDOW_MS ? state : { count: 0, firstFailureAt: now, lockedUntil: 0 };
   activeWindow.count += 1;
   if (activeWindow.count >= 5) {
@@ -164,7 +171,9 @@ export function verifyPassword(candidate: string, now = Date.now(), clientKey = 
   failedLogins.set(clientKey, activeWindow);
   if (now - globalFailures.firstFailureAt >= FAILED_LOGIN_WINDOW_MS) globalFailures = { count: 0, firstFailureAt: now, lockedUntil: 0 };
   globalFailures.count += 1;
-  if (globalFailures.count >= MAX_FAILED_LOGIN_ENTRIES) globalFailures.lockedUntil = now + FAILED_LOGIN_LOCKOUT_MS;
+  if (globalFailures.count >= MAX_FAILED_LOGIN_ENTRIES) {
+    globalFailures = { count: 0, firstFailureAt: now, lockedUntil: now + GLOBAL_FAILED_LOGIN_LOCKOUT_MS };
+  }
   pruneFailedLogins(now);
   return false;
 }

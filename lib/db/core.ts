@@ -7,18 +7,20 @@ const databaseFile = Buffer.from(`${runtimeDataDir}/barker.sqlite`);
 const statements = new Map<string, ReturnType<DatabaseSync["prepare"]>>();
 const retryWait = new Int32Array(new SharedArrayBuffer(4));
 const CURRENT_SCHEMA_VERSION = 3;
+const INITIALIZATION_ATTEMPTS = 3;
 let db: DatabaseSync;
 let initialized = false;
 
 export function transaction<T>(callback: () => T): T {
   initializeDatabase();
-  db.exec("BEGIN IMMEDIATE");
+  const nested = db.isTransaction;
+  db.exec(nested ? "SAVEPOINT barker_nested" : "BEGIN IMMEDIATE");
   try {
     const result = callback();
-    db.exec("COMMIT");
+    db.exec(nested ? "RELEASE barker_nested" : "COMMIT");
     return result;
   } catch (error) {
-    db.exec("ROLLBACK");
+    if (db.isTransaction) db.exec(nested ? "ROLLBACK TO barker_nested; RELEASE barker_nested" : "ROLLBACK");
     throw error;
   }
 }
@@ -106,11 +108,12 @@ function migrate(): void {
 export function initializeDatabase(): void {
   if (initialized) return;
   initializeStorage();
-  db = globalDb.barkerDb ?? new DatabaseSync(databaseFile);
-  db.exec("PRAGMA busy_timeout=2000; PRAGMA foreign_keys=ON; PRAGMA secure_delete=ON;");
-  initialized = true;
+  const shared = globalDb.barkerDb;
+  db = shared ?? new DatabaseSync(databaseFile);
   try {
-    for (let attempt = 0; attempt < 100; attempt += 1) {
+    db.exec("PRAGMA busy_timeout=2000; PRAGMA foreign_keys=ON; PRAGMA secure_delete=ON;");
+    initialized = true;
+    for (let attempt = 1; attempt <= INITIALIZATION_ATTEMPTS; attempt += 1) {
       try {
         db.exec("PRAGMA journal_mode=WAL;");
         const { user_version: existingVersion } = db.prepare("PRAGMA user_version").get() as { user_version: number };
@@ -118,17 +121,16 @@ export function initializeDatabase(): void {
         transaction(migrate);
         break;
       } catch (error) {
-        if (!(error instanceof Error) || !/database is locked|database schema is locked/i.test(error.message) || attempt === 99) throw error;
+        if (!(error instanceof Error) || !/database is locked|database schema is locked/i.test(error.message) || attempt === INITIALIZATION_ATTEMPTS) throw error;
         Atomics.wait(retryWait, 0, 0, 100);
       }
     }
-    globalDb.barkerDb = db;
     for (const suffix of ["", "-wal", "-shm"]) privateFile(`${databaseFile.toString()}${suffix}`);
+    globalDb.barkerDb = db;
   } catch (error) {
     initialized = false;
     statements.clear();
-    delete globalDb.barkerDb;
-    db.close();
+    if (!shared) db.close();
     throw error;
   }
 }

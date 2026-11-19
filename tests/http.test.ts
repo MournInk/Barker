@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { apiRoute, HttpError, jsonErrorFrom, MAX_REQUEST_BYTES, requestBody, requireSameOriginMutation } from "../lib/http";
+import { redactSecrets } from "../lib/errors";
 
 function jsonRequest(body: string, headers: Record<string, string> = {}) {
   return new Request("http://localhost:3000/api/tasks", { method: "POST", headers: { host: "localhost:3000", "content-type": "application/json", ...headers }, body });
@@ -38,4 +39,8 @@ test("the API boundary converts authentication or storage failures into sanitize
   assert.equal(response.status, 500);
   assert.match(response.headers.get("content-type") ?? "", /application\/json/);
   assert.deepEqual(await response.json(), { error: "服务暂时无法完成请求，请稍后重试" });
+});
+
+test("literal and encoded secrets are redacted without rescanning replacement markers", () => {
+  assert.equal(redactSecrets("key=?a.b and %3Fa.b or redact", ["?a.b", "redact"]), "key=[redacted] and [redacted] or [redacted]");
 });

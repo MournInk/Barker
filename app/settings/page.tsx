@@ -88,7 +88,11 @@ function SettingsForm({ initial, onSaved }: { initial: SettingsPayload; onSaved:
       <Button variant="outline" onPress={() => setConfirmPrune(true)}>清理旧记录</Button>
     </Card>
     {confirmPrune && <Confirm title="清理 30 天前的结束记录？" confirmLabel="清理记录" onClose={() => setConfirmPrune(false)} onConfirm={() => void prune()} busy={pruning}><p>相应消息正文及尝试历史将被永久删除。请先通过服务端备份工具保留需要的历史。等待投递和发送中的消息不会被清理。</p></Confirm>}
-    {confirmClearDeviceKey && <Confirm title="断开当前 Bark 设备？" confirmLabel="断开设备" onClose={() => setConfirmClearDeviceKey(false)} onConfirm={() => { setClearDeviceKey(true); setConfirmClearDeviceKey(false); }}><p>保存后，当前服务地址会保留，Device Key 将被清除。队列不会丢失，但在配置新设备前不会送达。</p></Confirm>}
+    {confirmClearDeviceKey && <Confirm title="断开当前 Bark 设备？" confirmLabel="断开设备" onClose={() => setConfirmClearDeviceKey(false)} onConfirm={() => {
+      setSettings((current) => ({ ...current, endpoint: saved.endpoint, deviceKey: "" }));
+      setClearDeviceKey(true);
+      setConfirmClearDeviceKey(false);
+    }}><p>保存后将保留当前服务地址并清除 Device Key。队列中的消息会保留，重新配置设备后继续投递。</p></Confirm>}
     <DeviceManager /><SecurityManager /><AuditLog />
   </div><aside className="settings-aside"><Card className="notification-preview"><div className="section-top"><h2>通知预览</h2><span className="mini-label">随配置更新</span></div><div className="notification-sample"><strong>{settings.title}</strong><p>测试通知将发送到 {settings.endpoint}。</p><small>分组 {settings.group || "无"} · 提示音 {settings.sound || "默认"}</small>{settings.icon && <p className="field-hint">图标：{settings.icon}</p>}</div><p className="preview-caption">任务编辑器显示各自的标题、正文和覆盖选项；实际外观由设备决定。</p></Card>
     <section className="settings-help"><h2>第一次使用？</h2><ol><li><span>1</span><p>在 iPhone 上打开 Bark 应用。</p></li><li><span>2</span><p>复制设备链接，将服务地址与 Device Key 填入左侧。</p></li><li><span>3</span><p>保存设置，发送测试通知。一切就绪。</p></li></ol><a href="https://bark.day.app" target="_blank" rel="noreferrer" className="text-action">了解 Bark<Glyph name="arrow" size={15} /></a></section>

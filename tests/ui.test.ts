@@ -12,6 +12,8 @@ test("API clients reject HTML or structurally invalid success payloads", () => {
   assert.equal(validApiPayload("/api/tasks", {}), false);
   assert.equal(validApiPayload("/api/deliveries", { deliveries: "not-an-array", total: 0 }), false);
   assert.equal(validApiPayload("/api/tasks/preview", { dates: ["not-a-date"] }), false);
+  assert.equal(validApiPayload("/api/tasks/preview", { dates: ["2030-02-31T01:00:00Z"] }), false);
+  assert.equal(validApiPayload("/api/tasks/preview", { dates: ["2030-02-28T01:00:00Z"] }), true);
   assert.equal(validApiPayload("/api/settings/test", { delivered: false }), false);
   assert.equal(validApiPayload("/api/overview", { tasks: [], upcoming: [], upcomingDays: [], recent: [], activity: [], stats: {}, deliveries: {}, serverTime: "2030-01-01T00:00:00Z" }), false);
   assert.equal(validApiPayload("/api/settings", { tasks: [] }), false);
@@ -108,6 +110,7 @@ test("task wall-clock conversion keeps preset days and rejects nonexistent DST t
 
 test("corrupt stored dates and timezones cannot crash the task editor", () => {
   assert.equal(localInputValue(new Date("invalid"), "Mars/Olympus"), "");
+  assert.equal(localInputValue(new Date("2030-06-01T22:00:00Z"), "Mars/Olympus"), "2030-06-02T06:00");
   assert.equal(toOffsetDateTime("2026-02-31T09:30"), "");
   assert.equal(formatTime("invalid"), "时间无效");
 });

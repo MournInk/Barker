@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, beforeEach, test } from "node:test";
-import { BarkDeliveryError } from "../lib/bark";
+import { Cron } from "croner";
+import { BarkDeliveryError, sendBark } from "../lib/bark";
 import { calendarDays, previewSchedule, upcomingWeekDetails } from "../lib/cron";
 import type { Task, TaskInput } from "../lib/types";
 
@@ -37,10 +39,12 @@ test("delivery order follows occurrence time and ordinary settings retain retry 
   const first = db.claimDelivery(due)!;
   assert.equal(first.occurrenceAt, "2030-01-01T00:01:00.000Z");
   db.markDeliveryFailed(first.id, first.leaseUntil, 1, "429", due, new Date("2030-01-01T02:00:00Z"));
-  db.writeRuntimeState("endpoint:test", "1893463200000");
   const previous = db.readSettingsState();
+  const { endpoint, deviceKey } = previous.settings;
+  const cooldown = `endpoint:${createHash("sha256").update(`${endpoint}\n${deviceKey}`).digest("hex")}`;
+  db.writeRuntimeState(cooldown, "1893463200000");
   db.writeSettings({ ...previous.settings, group: "new-group" }, previous.revision);
-  assert.equal(db.readRuntimeState("endpoint:test"), "1893463200000");
+  assert.equal(db.readRuntimeState(cooldown), "1893463200000");
   assert.equal(db.listDeliveries({ page: 1, pageSize: 10 }).deliveries.find((item) => item.id === first.id)?.nextAttemptAt, "2030-01-01T02:00:00.000Z");
   assert.equal(db.claimDelivery(due)?.occurrenceAt, "2030-01-01T00:02:00.000Z");
 });
@@ -62,9 +66,33 @@ test("permanent failures wait for correction without losing attempt history", as
   const failed = db.listDeliveries({ page: 1, pageSize: 10 }).deliveries[0];
   assert.equal(failed.manualOnly, true);
   assert.equal(await scheduler.processOneDelivery(new Date(due.getTime() + 3_600_000), async () => assert.fail("must not retry")), false);
-  db.editDelivery(failed.id, "Corrected", "fixed", failed.updatedAt);
+  db.editDelivery(failed.id, "Corrected", "fixed", failed.updatedAt, due);
   await scheduler.processOneDelivery(new Date(due.getTime() + 3_600_000), async (_settings, title) => { assert.equal(title, "Corrected"); });
   assert.equal(db.deliveryAttempts(failed.id).length, 2);
+});
+
+test("expired pending deliveries cannot be edited", () => {
+  const reminder = db.createTask({ ...input, maxLatenessMinutes: 1 }, created);
+  db.queueTaskBatch(reminder.id, due);
+  const delivery = db.listDeliveries({ page: 1, pageSize: 1 }).deliveries[0];
+  assert.throws(() => db.editDelivery(delivery.id, "Edited", "", delivery.updatedAt, new Date(delivery.expiresAt!)), { status: 409 });
+  assert.equal(db.listDeliveries({ page: 1, pageSize: 1 }).deliveries[0].taskName, input.name);
+});
+
+test("Bark endpoint failures start a cooldown while payload failures leave other messages eligible", async () => {
+  const settings = { ...db.readSettings(), deviceKey: "regression-cooldown-device" };
+  db.writeSettings(settings);
+  const cooldown = `endpoint:${createHash("sha256").update(`${settings.endpoint}\n${settings.deviceKey}`).digest("hex")}`;
+  for (const name of ["First outbox entry", "Second outbox entry"]) {
+    const reminder = db.createTask({ ...input, name }, created);
+    db.queueTaskBatch(reminder.id, due);
+  }
+  const respond = (httpStatus: number) => (target: typeof settings, title: string, body: string) =>
+    sendBark(target, title, body, async () => new Response(null, { status: httpStatus }));
+  assert.equal(await scheduler.processOneDelivery(due, respond(413)), true);
+  assert.equal(db.readRuntimeState(cooldown), null);
+  assert.equal(await scheduler.processOneDelivery(due, respond(503)), true);
+  assert.ok(Number(db.readRuntimeState(cooldown)) > due.getTime());
 });
 
 test("task-specific devices and options stay attached to queued messages", async () => {
@@ -114,14 +142,23 @@ test("queue capacity applies backpressure without consuming future occurrences",
   assert.equal(db.queueTaskBatch(task.id, late), 1);
 });
 
-test("100 minute schedules forecast in bounded time and retain complete counts", () => {
+test("100 minute schedules jump over clock slots instead of enumerating individual minutes", (context) => {
   const now = new Date("2030-01-01T00:00:00Z");
   const tasks = Array.from({ length: 100 }, (_, index) => ({ id: String(index), status: "active", cron: "* * * * *", timeZone: "Asia/Shanghai", nextRunAt: now.toISOString(), repeatCount: null, queuedCount: 0 } as Task));
-  const start = performance.now();
+  const nextRun = context.mock.method(Cron.prototype, "nextRun");
   const result = upcomingWeekDetails(tasks, now);
-  assert.ok(performance.now() - start < 1000);
+  assert.ok(nextRun.mock.callCount() <= tasks.length * 7);
   assert.equal(result.upcomingDays[1].total, 144_000);
   assert.equal(result.upcoming.length, 28);
+});
+
+test("forecast backlog respects the request deadline and reports incomplete data", (context) => {
+  let tick = 0;
+  context.mock.method(performance, "now", () => tick++);
+  const task = { id: "backlog", status: "active", cron: "0 9 * * *", timeZone: "Asia/Shanghai", nextRunAt: "2000-01-01T01:00:00Z", repeatCount: 15_000, queuedCount: 0 } as Task;
+  const result = upcomingWeekDetails([task], due, { deadline: 10 });
+  assert.equal(result.forecastTruncated, true);
+  assert.equal(result.upcoming.length, 0);
 });
 
 test("display calendars retain local midnight across DST", () => {

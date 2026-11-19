@@ -25,7 +25,10 @@ function forwardSignal() {
 }
 
 function shutdown(signal) {
-  if (stoppingSignal) return;
+  if (stoppingSignal) {
+    if (forwarded) child.kill("SIGKILL");
+    return;
+  }
   stoppingSignal = signal;
   deadline = setTimeout(forwardSignal, 20_000);
   deadline.unref();
@@ -38,5 +41,5 @@ child.on("message", (message) => { if (message?.type === "barker:stopped") forwa
 child.once("error", (error) => { console.error(`Barker server failed to start: ${error.message}`); process.exitCode = 1; });
 child.once("exit", (code, signal) => {
   clearTimeout(deadline);
-  process.exitCode = code ?? (signal === "SIGINT" ? 130 : signal === "SIGTERM" ? 143 : 1);
+  process.exitCode = code ?? (signal === "SIGINT" ? 130 : signal === "SIGTERM" ? 143 : signal === "SIGKILL" ? 137 : 1);
 });

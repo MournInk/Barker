@@ -1,7 +1,7 @@
 import { backup, DatabaseSync } from "node:sqlite";
 import { createHash } from "node:crypto";
 import { chmodSync, copyFileSync, createReadStream, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { loadRuntimeEnvironment, runtimeDirectory } from "./runtime-paths.mjs";
 
 const names = ["barker.sqlite", "access-password.txt", "session-secret.txt"];
@@ -43,7 +43,7 @@ function regularFile(path) {
 
 function isSameOrWithin(parent, candidate) {
   const path = relative(parent, candidate);
-  return path === "" || (!path.startsWith("..") && !isAbsolute(path));
+  return !isAbsolute(path) && path.split(sep, 1)[0] !== "..";
 }
 
 function canonicalPath(path) {

@@ -32,6 +32,7 @@ export default function TasksPage() {
   const [busy, setBusy] = useState("");
   const [selected, setSelected] = useState<string[]>([]);
   const [destroy, setDestroy] = useState<Task | null>(null);
+  const [confirmBulkArchive, setConfirmBulkArchive] = useState(false);
   useEffect(() => {
     const timer = setTimeout(() => { setSearch(query); setPage(1); }, 250);
     return () => clearTimeout(timer);
@@ -41,10 +42,6 @@ export default function TasksPage() {
   if (filter !== "all") params.set("status", filter);
   const { data, error, refresh } = useResource<{ tasks: Task[]; total: number; page: number }>(`/api/tasks?${params}`);
 
-  function returnToPreviousPageIfEmpty() {
-    if (data?.tasks.length === 1 && page > 1) setPage(page - 1);
-  }
-
   async function toggle(task: Task) {
     setBusy(task.id);
     try {
@@ -52,8 +49,8 @@ export default function TasksPage() {
         method: "PATCH", body: JSON.stringify({ status: task.status === "paused" ? "active" : "paused", revision: task.revision }),
       });
       notify(task.status === "paused" ? "提醒已恢复，暂停期间不会补发。" : "提醒已暂停，已排队的消息会继续投递。");
-      if (filter !== "all") returnToPreviousPageIfEmpty();
-      void Promise.allSettled([refresh(), refreshDashboard()]);
+      await refresh();
+      void refreshDashboard();
     } catch (error) {
       notify(errorMessage(error), "error");
     } finally {
@@ -67,9 +64,9 @@ export default function TasksPage() {
     try {
       await api(`/api/tasks/${archive.id}`, { method: "DELETE", headers: { "if-match": String(archive.revision) } });
       setArchive(null);
-      returnToPreviousPageIfEmpty();
       notify("提醒已归档。投递记录和待发送消息均已保留。");
-      void Promise.allSettled([refresh(), refreshDashboard()]);
+      await refresh();
+      void refreshDashboard();
     } catch (error) {
       notify(errorMessage(error), "error");
     } finally {
@@ -78,15 +75,16 @@ export default function TasksPage() {
   }
 
   async function bulk(status: string) {
-    if (!data) return;
+    const items = data?.tasks.filter((task) => selected.includes(task.id)).map(({ id, revision }) => ({ id, revision })) ?? [];
+    if (!items.length) { setConfirmBulkArchive(false); return; }
     setBusy("bulk");
     try {
-      const result = await api<{ results: Array<{ success: boolean; error?: string }> }>("/api/tasks", { method: "PATCH", body: JSON.stringify({ status, items: data.tasks.filter((task) => selected.includes(task.id)).map(({ id, revision }) => ({ id, revision })) }) });
+      const result = await api<{ results: Array<{ success: boolean; error?: string }> }>("/api/tasks", { method: "PATCH", body: JSON.stringify({ status, items }) });
       const failures = result.results.filter((item) => !item.success);
       notify(failures.length ? failures.map((item) => item.error).join("；") : "批量操作完成", failures.length ? "error" : "success");
       setSelected([]); await Promise.all([refresh(), refreshDashboard()]);
     } catch (error) { notify(errorMessage(error), "error"); }
-    finally { setBusy(""); }
+    finally { setConfirmBulkArchive(false); setBusy(""); }
   }
 
   async function restore(task: Task) {
@@ -124,7 +122,10 @@ export default function TasksPage() {
         <div className="bulk-toolbar">
           <Selection label="选择本页提醒" selected={Boolean(data?.tasks.length && data.tasks.every((task) => selected.includes(task.id)))} onChange={(value) => setSelected(value ? data?.tasks.map((task) => task.id) ?? [] : [])} />
           <span>已选 {data?.tasks.filter((task) => selected.includes(task.id)).length ?? 0} 项</span>
-          {[{ value: "paused", label: "批量暂停" }, { value: "active", label: "批量恢复" }, { value: "archived", label: "批量归档" }].map((action) => <Button key={action.value} size="sm" variant="ghost" isDisabled={!data?.tasks.some((task) => selected.includes(task.id)) || Boolean(busy)} onPress={() => void bulk(action.value)}>{action.label}</Button>)}
+          {[{ value: "paused", label: "批量暂停" }, { value: "active", label: "批量恢复" }, { value: "archived", label: "批量归档" }].map((action) => <Button key={action.value} size="sm" variant="ghost" isDisabled={!data?.tasks.some((task) => selected.includes(task.id)) || Boolean(busy)} onPress={() => {
+            if (action.value === "archived") setConfirmBulkArchive(true);
+            else void bulk(action.value);
+          }}>{action.label}</Button>)}
         </div>
         <div className="list-toolbar">
           <Tabs selectedKey={filter} onSelectionChange={(key) => { setFilter(String(key)); setPage(1); }} variant="secondary" className="filter-tabs">
@@ -195,6 +196,9 @@ export default function TasksPage() {
           <p>未来的排期将停止。已经到期的提醒会继续投递，全部历史记录都会保留，你也可以随时复制为新提醒。</p>
         </Confirm>
       )}
+      {confirmBulkArchive && <Confirm title="归档选中的提醒？" confirmLabel="确认批量归档" onClose={() => setConfirmBulkArchive(false)} onConfirm={() => void bulk("archived")} busy={busy === "bulk"}>
+        <p>这些提醒的未来排期将停止，已到期的消息和历史记录会保留。</p>
+      </Confirm>}
       {destroy && <Confirm title={`永久删除「${destroy.name}」？`} confirmLabel="永久删除" onClose={() => setDestroy(null)} onConfirm={() => void removePermanently()} busy={busy === destroy.id}><p>任务、待投递消息和全部尝试历史都会删除，此操作无法撤销。</p></Confirm>}
     </div>
   );

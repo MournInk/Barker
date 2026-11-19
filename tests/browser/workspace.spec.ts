@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { parseDate } from "@internationalized/date";
 import { localDateValue } from "../../lib/ui";
 
 async function login(page: Page) {
@@ -13,6 +14,28 @@ async function login(page: Page) {
     if (current) await page.request.delete(`/api/tasks/${task.id}?permanent=1`, { headers: { "if-match": String(current.revision) } });
   }
 }
+
+test("production HTML uses a fresh nonce for its inline scripts", async ({ page }) => {
+  const readNonce = async () => {
+    const response = await page.goto("/");
+    expect(response?.status()).toBe(200);
+    const policy = await response?.headerValue("content-security-policy");
+    const scripts = policy?.split("; ").find((directive) => directive.startsWith("script-src ")) ?? "";
+    const nonce = scripts.match(/'nonce-([^']+)'/)?.[1];
+    expect(nonce).toBeTruthy();
+    expect(scripts).not.toContain("'unsafe-inline'");
+    expect(scripts).not.toContain("'unsafe-eval'");
+    const inlineNonces = await page.locator("script:not([src])").evaluateAll((elements) => elements.map((element) => (element as HTMLScriptElement).nonce));
+    expect(inlineNonces.length).toBeGreaterThan(0);
+    expect([...new Set(inlineNonces)]).toEqual([nonce]);
+    return nonce;
+  };
+  const first = await readNonce();
+  expect(await readNonce()).not.toBe(first);
+  await login(page);
+  await page.getByRole("link", { name: "所有提醒", exact: true }).click();
+  await expect(page.getByRole("heading", { name: /所有提醒/ })).toBeVisible();
+});
 
 test("mobile overview prioritizes the next reminder and unsaved settings protect navigation", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
@@ -141,6 +164,28 @@ test("copying and editing a weekly task preserves its weekday and wall clock", a
   expect(tasks.find((task: { name: string }) => task.name === "Monday review").description).toBe("Original");
 });
 
+test("copying an expired cutoff picks a fresh date in the task timezone", async ({ page }) => {
+  await login(page);
+  const timeZone = "Pacific/Auckland";
+  const startsAt = new Date(Date.now() + 86_400_000);
+  startsAt.setUTCMinutes(0, 0, 0);
+  startsAt.setUTCHours(20);
+  const endDate = localDateValue(new Date(startsAt.getTime() + 86_400_000), timeZone);
+  const response = await page.request.post("/api/tasks", { data: {
+    name: "Limited reminder", startsAt: startsAt.toISOString(), timeZone, preset: "custom", cron: "0 * * * *", endDate,
+  } });
+  expect(response.status()).toBe(201);
+
+  const browserNow = new Date(startsAt.getTime() + 3 * 86_400_000);
+  await page.clock.setFixedTime(browserNow);
+  await page.goto("/tasks");
+  await page.getByRole("button", { name: "更多操作 Limited reminder", exact: true }).click();
+  const preview = page.waitForRequest((request) => request.url().endsWith("/api/tasks/preview") && request.method() === "POST");
+  await page.getByRole("menuitem", { name: "复制为新提醒" }).click();
+  const expected = parseDate(localDateValue(browserNow, timeZone)).add({ days: 30 }).toString();
+  expect((await preview).postDataJSON()).toMatchObject({ timeZone, endDate: expected });
+});
+
 test("a stale settings tab cannot overwrite a newer saved configuration", async ({ page, context }) => {
   await login(page);
   await page.goto("/settings");
@@ -165,6 +210,22 @@ test("a stale settings tab cannot overwrite a newer saved configuration", async 
   expect(actual.settings.group).toBe("Latest configuration");
   expect(actual.settings.deviceKey).toBeUndefined();
   await other.close();
+});
+
+test("disconnecting clears a typed replacement key before saving", async ({ page }) => {
+  await login(page);
+  const before = await (await page.request.get("/api/settings")).json();
+  const saved = await page.request.put("/api/settings", { data: { ...before.settings, revision: before.revision, deviceKey: "browser-connected-key" } });
+  expect(saved.status()).toBe(200);
+  await page.goto("/settings");
+  const key = page.getByLabel("Device Key", { exact: true });
+  await key.fill("unsaved-key");
+  await page.getByRole("button", { name: "断开设备", exact: true }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "断开设备", exact: true }).click();
+  await expect(key).toHaveValue("");
+  await page.getByRole("button", { name: "保存设置", exact: true }).click();
+  await expect(page.getByRole("status").filter({ hasText: "设备连接已清除" })).toBeVisible();
+  expect((await (await page.request.get("/api/settings")).json()).deviceKeyConfigured).toBe(false);
 });
 
 test("calendar overflow is visible and overview remains usable on desktop", async ({ page }) => {

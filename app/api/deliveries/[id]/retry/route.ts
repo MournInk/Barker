@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { requestIsAuthorized } from "@/lib/auth";
 import { retryDeliveryResult } from "@/lib/db";
-import { apiRoute, jsonError, jsonErrorFrom, jsonObjectBody, requestBody, requireSameOriginMutation } from "@/lib/http";
+import { apiRoute, jsonError, jsonObjectBody, requestBody, requireSameOriginMutation } from "@/lib/http";
 
 export const runtime = "nodejs";
 
@@ -9,8 +9,7 @@ export const POST = apiRoute(async (request: Request, context: { params: Promise
   if (!requestIsAuthorized(request)) return jsonError("未授权", 401);
   const blocked = requireSameOriginMutation(request);
   if (blocked) return blocked;
-  try { jsonObjectBody(await requestBody(request)); }
-  catch (error) { return jsonErrorFrom(error); }
+  jsonObjectBody(await requestBody(request));
   const { id } = await context.params;
   const result = retryDeliveryResult(id);
   if (result === "queued") return NextResponse.json({ queued: true });
