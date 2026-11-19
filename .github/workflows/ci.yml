@@ -36,15 +36,16 @@ jobs:
           EVENT: ${{ github.event_name }}
         run: node scripts/ci-scope.mjs "$BASE" "$HEAD" "$EVENT"
 
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        id: pnpm
+        if: steps.scope.outputs.source == 'true' || steps.scope.outputs.container == 'true' || steps.scope.outputs.browser == 'true' || steps.scope.outputs.tests != '[]'
+
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         id: node
         if: steps.scope.outputs.source == 'true' || steps.scope.outputs.container == 'true' || steps.scope.outputs.browser == 'true' || steps.scope.outputs.tests != '[]'
         with:
           node-version: "24.22.2"
-
-      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
-        id: pnpm
-        if: steps.scope.outputs.source == 'true' || steps.scope.outputs.container == 'true' || steps.scope.outputs.browser == 'true' || steps.scope.outputs.tests != '[]'
+          cache: ${{ github.event_name == 'push' && 'pnpm' || '' }}
 
       - name: Install locked dependencies
         id: install

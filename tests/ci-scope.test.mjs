@@ -61,6 +61,19 @@ test("runtime storage and browser launch changes trigger their end-to-end checks
   assert.deepEqual(selectChecks(["scripts/browser-server.mjs"]).tests, ["tests/shutdown.test.mjs"]);
 });
 
+test("build and runtime helpers select production builds and container smoke", () => {
+  for (const file of ["scripts/runtime-paths.mjs", "scripts/build-preflight.mjs", "lib/db/core.ts", "lib/logging.ts"]) {
+    const checks = selectChecks([file]);
+    assert.equal(checks.source, true, file);
+    assert.equal(checks.container, true, file);
+  }
+  for (const file of ["lib/contracts.ts", "proxy.ts", "next.config.ts"]) {
+    const checks = selectChecks([file]);
+    assert.equal(checks.container, true, file);
+    assert.equal(checks.browser, true, file);
+  }
+});
+
 test("added tests and CI selector changes are checked directly", () => {
   assert.deepEqual(selectChecks(["tests/cron.test.ts", "scripts/ci-scope.mjs"]).tests, ["tests/ci-scope.test.mjs", "tests/cron.test.ts", "tests/release.test.mjs"]);
 });

@@ -55,8 +55,13 @@ test("release and CI workflow YAML parse with the expected publication gates", (
   assert.match(release.jobs.verify.steps.find((step) => step.name === "Verify version syntax and package agreement").run, /git merge-base --is-ancestor/);
   assert.equal(ci.concurrency["cancel-in-progress"], "${{ github.event_name == 'pull_request' }}");
   const steps = release.jobs.image.steps;
+  assert.equal(release.concurrency, undefined);
+  assert.deepEqual(release.jobs.image.concurrency, { group: "release-publication", "cancel-in-progress": false });
   assert.ok(steps.findIndex((step) => step.name === "Promote tested digest to stable channels") > steps.findIndex((step) => step.name === "Pull and verify published digest on each platform"));
   assert.doesNotMatch(steps.find((step) => step.id === "publish").run, /JSON.parse\(process.env.CHANNELS\)/);
+  for (const step of [steps.find((step) => step.id === "publish"), steps.find((step) => step.name === "Promote tested digest to stable channels")]) {
+    assert.match(step.run, /--format '\{\{json \.Manifest\.Digest\}\}' \|\s+jq -er/);
+  }
   assert.equal(ci.jobs.checks.steps.some((step) => step.name === "Check affected browser interactions"), true);
   for (const workflow of [ci, release]) {
     for (const job of Object.values(workflow.jobs)) {

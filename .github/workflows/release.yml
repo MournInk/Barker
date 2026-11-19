@@ -8,10 +8,6 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: release-publication
-  cancel-in-progress: false
-
 env:
   NEXT_TELEMETRY_DISABLED: "1"
   TZ: Asia/Shanghai
@@ -64,6 +60,9 @@ jobs:
   image:
     needs: verify
     if: github.event_name == 'push' && github.ref_type == 'tag' && github.event.created && startsWith(github.ref, 'refs/tags/v')
+    concurrency:
+      group: release-publication
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
@@ -109,7 +108,6 @@ jobs:
         env:
           IMAGE: ${{ steps.candidate.outputs.image }}
           VERSION: ${{ steps.candidate.outputs.version }}
-          CHANNELS: ${{ steps.candidate.outputs.channels }}
         run: |
           set -euo pipefail
           sources=()
@@ -129,7 +127,8 @@ jobs:
             --annotation "index:org.opencontainers.image.version=$VERSION" \
             --annotation "index:org.opencontainers.image.licenses=MIT" \
             "${sources[@]}"
-          digest="$(docker buildx imagetools inspect "$IMAGE:$VERSION" --format '{{.Manifest.Digest}}')"
+          digest="$(docker buildx imagetools inspect "$IMAGE:$VERSION" --format '{{json .Manifest.Digest}}' |
+            jq -er 'select(type == "string" and test("^sha256:[0-9a-f]{64}$"))')"
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
           echo "$IMAGE@$digest" >> "$GITHUB_STEP_SUMMARY"
       - name: Pull and verify published digest on each platform
@@ -152,5 +151,7 @@ jobs:
           set -euo pipefail
           while IFS= read -r channel; do
             docker buildx imagetools create --tag "$IMAGE:$channel" "$IMAGE@$DIGEST"
-            test "$(docker buildx imagetools inspect "$IMAGE:$channel" --format '{{.Manifest.Digest}}')" = "$DIGEST"
+            channel_digest="$(docker buildx imagetools inspect "$IMAGE:$channel" --format '{{json .Manifest.Digest}}' |
+              jq -er 'select(type == "string" and test("^sha256:[0-9a-f]{64}$"))')"
+            test "$channel_digest" = "$DIGEST"
           done < <(node -e 'JSON.parse(process.env.CHANNELS).filter(value => value !== process.env.VERSION && value !== `sha-${process.env.GITHUB_SHA}`).forEach(value => console.log(value))')

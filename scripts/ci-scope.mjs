@@ -38,9 +38,9 @@ export function selectChecks(files) {
     }
     if (/^tests\/[^/]+\.test\.(ts|mjs)$/.test(file)) tests.add(file);
   }
-  const source = files.some((file) => /^(app\/|components\/|lib\/|scripts\/verify-standalone\.mjs$|instrumentation\.ts$|next\.config\.ts$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|tsconfig\.json$|postcss\.config\.mjs$|eslint\.config\.mjs$)/.test(file));
-  const container = files.some((file) => /^(Dockerfile$|\.dockerignore$|docker-compose\.yml$|scripts\/(container-smoke|verify-standalone|start-server|data-tools)\.mjs$|instrumentation\.ts$|next\.config\.ts$|lib\/(auth|bark|cron|db|errors|http|scheduler|storage|types|validation)\.ts$|app\/api\/|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$)/.test(file));
-  const browser = files.some((file) => /^(app\/|components\/|lib\/(ui|resource|types)\.ts$|tests\/browser\/|playwright\.config\.ts$|scripts\/browser-server\.mjs$|package\.json$|pnpm-lock\.yaml$)/.test(file));
+  const source = files.some((file) => /^(app\/|components\/|lib\/|scripts\/(build-preflight|runtime-paths|verify-standalone)\.mjs$|(?:instrumentation|proxy|next\.config)\.ts$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|tsconfig\.json$|postcss\.config\.mjs$|eslint\.config\.mjs$)/.test(file));
+  const container = files.some((file) => /^(Dockerfile$|\.dockerignore$|docker-compose\.yml$|scripts\/(build-preflight|container-smoke|runtime-paths|verify-standalone|start-server|data-tools)\.mjs$|(?:instrumentation|proxy|next\.config)\.ts$|lib\/db\/|lib\/(auth|bark|contracts|cron|db|errors|http|logging|scheduler|storage|types|validation)\.ts$|app\/api\/|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$)/.test(file));
+  const browser = files.some((file) => /^(app\/|components\/|lib\/(contracts|ui|resource|types)\.ts$|tests\/browser\/|(?:proxy|next\.config|playwright\.config)\.ts$|scripts\/browser-server\.mjs$|package\.json$|pnpm-lock\.yaml$)/.test(file));
   return { tests: [...tests].sort(), source, container, browser };
 }
 
